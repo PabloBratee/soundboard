@@ -7,6 +7,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
+using Soundboard.App.Hotkeys;
 using Soundboard.App.Presentation;
 using Soundboard.App.Storage;
 using Soundboard.Audio;
@@ -24,8 +25,10 @@ public partial class MainWindow : Window
     private readonly ApplicationSettingsStore settingsStore = new();
     private readonly ObservableCollection<SoundTileViewModel> soundTiles = [];
     private readonly SemaphoreSlim libraryActionGate = new(1, 1);
+    private readonly SemaphoreSlim soundTriggerGate = new(1, 1);
     private readonly ICollectionView soundTilesView;
 
+    private GlobalHotkeyService? hotkeyService;
     private AudioDeviceSnapshot? currentSnapshot;
     private AudioFormatInfo? selectedMicrophoneFormat;
     private AudioFormatInfo? selectedRenderFormat;
@@ -36,6 +39,10 @@ public partial class MainWindow : Window
     private long currentSoundSessionId;
     private string lastDiagnosticMessage =
         "No engine diagnostic messages.";
+    private string lastHotkeyAction = "None";
+    private string lastHotkeyRegistrationError = "None";
+    private Guid? lastTriggeredSoundId;
+    private SoundTriggerSource? lastSoundTriggerSource;
     private bool isRefreshing;
     private bool isImporting;
     private bool isApplyingSettings;
@@ -72,6 +79,10 @@ public partial class MainWindow : Window
             MonitorSoundsCheckBox_Changed;
         MonitorVolumeSlider.ValueChanged +=
             MonitorVolumeSlider_ValueChanged;
+        GlobalHotkeysCheckBox.Checked +=
+            GlobalHotkeysCheckBox_Changed;
+        GlobalHotkeysCheckBox.Unchecked +=
+            GlobalHotkeysCheckBox_Changed;
 
         audioEngine.StateChanged += AudioEngine_StateChanged;
         audioEngine.ErrorOccurred += AudioEngine_ErrorOccurred;
@@ -91,7 +102,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            await LoadSettingsAndLibraryAsync();
+            await LoadLibraryAndSettingsAsync();
+            InitializeGlobalHotkeys();
             await RefreshDevicesAsync(
                 appSettings.MicrophoneEndpointId,
                 appSettings.VirtualOutputEndpointId,
@@ -105,12 +117,8 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task LoadSettingsAndLibraryAsync()
+    private async Task LoadLibraryAndSettingsAsync()
     {
-        var settingsResult = await settingsStore.LoadAsync();
-        appSettings = settingsResult.Settings;
-        ApplySettingsToWindowAndControls();
-
         var libraryResult = await soundLibraryStore.LoadAsync();
         soundTiles.Clear();
         foreach (var sound in libraryResult.Sounds)
@@ -119,6 +127,10 @@ public partial class MainWindow : Window
         }
 
         UpdateLibraryPresentation();
+
+        var settingsResult = await settingsStore.LoadAsync();
+        appSettings = settingsResult.Settings;
+        ApplySettingsToWindowAndControls();
 
         var warnings = new List<string>();
         if (settingsResult.Warning is not null)
@@ -140,6 +152,53 @@ public partial class MainWindow : Window
         RefreshDiagnosticStatus();
     }
 
+    private void InitializeGlobalHotkeys()
+    {
+        hotkeyService = new GlobalHotkeyService(
+            this,
+            appSettings.GlobalHotkeysEnabled);
+        hotkeyService.HotkeyInvoked +=
+            HotkeyService_HotkeyInvoked;
+
+        foreach (var tile in soundTiles)
+        {
+            if (tile.Sound.Hotkey is not null)
+            {
+                hotkeyService.LoadPersistedBinding(
+                    HotkeyTarget.ForSound(tile.Id),
+                    tile.Sound.Hotkey);
+            }
+        }
+
+        if (appSettings.StopSoundHotkey is not null)
+        {
+            hotkeyService.LoadPersistedBinding(
+                HotkeyTarget.StopSound,
+                appSettings.StopSoundHotkey);
+        }
+
+        UpdateHotkeyPresentation();
+        var unavailable = hotkeyService.Statuses
+            .Where(
+                status =>
+                    status.State
+                    == HotkeyRegistrationState.Unavailable)
+            .ToArray();
+        if (unavailable.Length > 0)
+        {
+            lastHotkeyRegistrationError =
+                string.Join(
+                    " | ",
+                    unavailable.Select(
+                        status =>
+                            status.Error
+                            ?? $"{status.Hotkey?.DisplayText} is unavailable."));
+            HotkeyStatusTextBlock.Text =
+                $"{unavailable.Length} assigned hotkey(s) are unavailable. "
+                + "Other valid hotkeys remain active.";
+        }
+    }
+
     private void ApplySettingsToWindowAndControls()
     {
         isApplyingSettings = true;
@@ -155,6 +214,8 @@ public partial class MainWindow : Window
                 appSettings.MonitoringEnabled;
             MonitorVolumeSlider.Value =
                 appSettings.MonitorVolume * 100d;
+            GlobalHotkeysCheckBox.IsChecked =
+                appSettings.GlobalHotkeysEnabled;
 
             if (appSettings.WindowWidth is { } width)
             {
@@ -626,58 +687,531 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (audioEngine.State != AudioEngineState.Running)
-        {
-            ShowUiError(
-                "Start the audio engine before playing a sound. Clicking "
-                + "a tile never starts audio routing automatically.");
-            return;
-        }
-
-        try
-        {
-            ErrorTextBlock.Text = string.Empty;
-            var managedPath =
-                soundLibraryStore.GetManagedFilePath(tile.Sound);
-            await Task.Run(
-                () => audioEngine.PlaySound(tile.Id, managedPath));
-
-            if (audioEngine.CurrentSoundId == tile.Id)
-            {
-                StatusTextBlock.Text =
-                    $"Playing {tile.DisplayName} once from the beginning.";
-            }
-        }
-        catch (Exception exception)
-        {
-            ShowUiError(exception.Message);
-        }
-        finally
-        {
-            UpdateControlAvailability();
-        }
+        await TriggerSoundAsync(tile.Id, SoundTriggerSource.Mouse);
     }
 
     private async void StopSoundButton_Click(
         object sender,
         RoutedEventArgs eventArgs)
     {
+        await StopCurrentSoundAsync(SoundTriggerSource.Mouse);
+    }
+
+    private async Task TriggerSoundAsync(
+        Guid soundId,
+        SoundTriggerSource source)
+    {
+        await soundTriggerGate.WaitAsync();
         try
         {
+            if (isClosing)
+            {
+                return;
+            }
+
+            lastTriggeredSoundId = soundId;
+            lastSoundTriggerSource = source;
+            lastHotkeyAction = source == SoundTriggerSource.Hotkey
+                ? $"Requested sound {soundId}"
+                : lastHotkeyAction;
+
+            var engineState = audioEngine.State;
+            if (engineState != AudioEngineState.Running)
+            {
+                var message = engineState switch
+                {
+                    AudioEngineState.Stopped =>
+                        "Hotkey ignored because the audio engine is stopped. "
+                        + "Start it manually in Soundboard.",
+                    AudioEngineState.Starting =>
+                        "Sound request ignored while the audio engine is starting.",
+                    AudioEngineState.Stopping =>
+                        "Sound request ignored while the audio engine is stopping.",
+                    AudioEngineState.Faulted =>
+                        "Sound request ignored because the audio engine is faulted.",
+                    _ =>
+                        $"Sound request ignored while the audio engine is "
+                        + $"{engineState}."
+                };
+                StatusTextBlock.Text = source == SoundTriggerSource.Mouse
+                    ? "Start the audio engine before playing a sound. "
+                        + "Sound tiles never start audio routing automatically."
+                    : message;
+                lastDiagnosticMessage = message;
+                RefreshDiagnosticStatus();
+                return;
+            }
+
+            await libraryActionGate.WaitAsync();
+            try
+            {
+                var tile = FindTile(soundId);
+                if (tile is null)
+                {
+                    var message =
+                        $"Sound request ignored because sound {soundId} "
+                        + "is no longer in the library.";
+                    StatusTextBlock.Text = message;
+                    lastDiagnosticMessage = message;
+                    return;
+                }
+
+                var managedPath =
+                    soundLibraryStore.GetManagedFilePath(tile.Sound);
+                if (!File.Exists(managedPath))
+                {
+                    var message =
+                        $"The managed file for \"{tile.DisplayName}\" "
+                        + "is missing. The sound was not played.";
+                    ErrorTextBlock.Text = message;
+                    StatusTextBlock.Text =
+                        "The requested sound could not be played.";
+                    lastDiagnosticMessage = message;
+                    return;
+                }
+
+                ErrorTextBlock.Text = string.Empty;
+                await Task.Run(
+                    () => audioEngine.PlaySound(tile.Id, managedPath));
+
+                if (audioEngine.CurrentSoundId == tile.Id)
+                {
+                    StatusTextBlock.Text =
+                        $"Playing {tile.DisplayName} once from the beginning "
+                        + $"({source.ToString().ToLowerInvariant()}).";
+                }
+            }
+            finally
+            {
+                libraryActionGate.Release();
+            }
+        }
+        catch (Exception exception)
+        {
+            var message =
+                $"Sound playback could not be started: {exception.Message}";
+            ErrorTextBlock.Text = message;
+            StatusTextBlock.Text =
+                "The requested sound could not be played.";
+            lastDiagnosticMessage = message;
+        }
+        finally
+        {
+            soundTriggerGate.Release();
+            UpdateControlAvailability();
+            RefreshDiagnosticStatus();
+        }
+    }
+
+    private async Task StopCurrentSoundAsync(SoundTriggerSource source)
+    {
+        await soundTriggerGate.WaitAsync();
+        try
+        {
+            if (isClosing)
+            {
+                return;
+            }
+
+            lastSoundTriggerSource = source;
+            if (source == SoundTriggerSource.Hotkey)
+            {
+                lastHotkeyAction = "Stop current sound";
+            }
+
             await Task.Run(audioEngine.StopSound);
             StatusTextBlock.Text =
-                "Sound playback stopped. The microphone remains active.";
+                "Sound playback stopped. The microphone and audio engine "
+                + "remain active.";
+        }
+        catch (Exception exception)
+        {
+            var message =
+                $"Sound playback could not be stopped: {exception.Message}";
+            ErrorTextBlock.Text = message;
+            StatusTextBlock.Text =
+                "The requested sound action did not complete.";
+            lastDiagnosticMessage = message;
+        }
+        finally
+        {
+            soundTriggerGate.Release();
+            UpdateControlAvailability();
+            RefreshDiagnosticStatus();
+        }
+    }
+
+    private async void HotkeyService_HotkeyInvoked(
+        object? sender,
+        HotkeyInvokedEventArgs eventArgs)
+    {
+        try
+        {
+            if (isClosing
+                || hotkeyService is null
+                || !hotkeyService.Enabled
+                || GlobalHotkeysCheckBox.IsChecked != true)
+            {
+                return;
+            }
+
+            if (eventArgs.Target.Kind == HotkeyTargetKind.StopSound)
+            {
+                await StopCurrentSoundAsync(SoundTriggerSource.Hotkey);
+            }
+            else
+            {
+                await TriggerSoundAsync(
+                    eventArgs.Target.SoundId,
+                    SoundTriggerSource.Hotkey);
+            }
+        }
+        catch (Exception exception)
+        {
+            var message =
+                $"A global hotkey action failed safely: {exception.Message}";
+            ErrorTextBlock.Text = message;
+            StatusTextBlock.Text =
+                "The global hotkey action did not complete.";
+            lastDiagnosticMessage = message;
+            RefreshDiagnosticStatus();
+        }
+    }
+
+    private void GlobalHotkeysCheckBox_Changed(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (isApplyingSettings || hotkeyService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var enabled = GlobalHotkeysCheckBox.IsChecked == true;
+            hotkeyService.SetEnabled(enabled);
+            appSettings = appSettings with
+            {
+                GlobalHotkeysEnabled = enabled
+            };
+            ScheduleSettingsSave();
+            StatusTextBlock.Text = enabled
+                ? "Global hotkeys enabled. Valid assignments were retried."
+                : "Global hotkeys disabled. Assignments were preserved.";
+            lastHotkeyAction = enabled
+                ? "Enabled global hotkeys"
+                : "Disabled global hotkeys";
+            UpdateHotkeyPresentation();
         }
         catch (Exception exception)
         {
             ShowUiError(
-                $"Sound playback could not be stopped: "
+                $"Global hotkeys could not be updated: {exception.Message}");
+        }
+    }
+
+    private void RetryHotkeysButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (hotkeyService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var statuses = hotkeyService.RetryUnavailable();
+            var unavailable = statuses.Count(
+                status =>
+                    status.State
+                    == HotkeyRegistrationState.Unavailable);
+            StatusTextBlock.Text = unavailable == 0
+                ? "All assigned hotkeys are now registered."
+                : $"Retried unavailable hotkeys; {unavailable} remain "
+                    + "unavailable.";
+            lastHotkeyAction = "Retried unavailable hotkeys";
+            UpdateHotkeyPresentation();
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"Hotkey registrations could not be retried: "
+                + exception.Message);
+        }
+    }
+
+    private async void AssignTileHotkeyButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if ((sender as FrameworkElement)?.Tag
+            is not SoundTileViewModel tile)
+        {
+            return;
+        }
+
+        var dialog = new HotkeyAssignmentDialog(
+            $"Sound: {tile.DisplayName}",
+            tile.Sound.Hotkey)
+        {
+            Owner = this
+        };
+        if (!ShowHotkeyAssignmentDialog(dialog))
+        {
+            return;
+        }
+
+        var proposed = dialog.ClearRequested
+            ? null
+            : dialog.ProposedHotkey;
+        await ApplySoundHotkeyAsync(tile, proposed);
+    }
+
+    private async Task ApplySoundHotkeyAsync(
+        SoundTileViewModel tile,
+        HotkeyGesture? proposed)
+    {
+        if (hotkeyService is null)
+        {
+            ShowUiError("The global-hotkey service is not initialized.");
+            return;
+        }
+
+        var target = HotkeyTarget.ForSound(tile.Id);
+        var conflict = FindLocalHotkeyConflict(target, proposed);
+        if (conflict is not null)
+        {
+            ShowUiError(conflict);
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        var previous = tile.Sound.Hotkey;
+        try
+        {
+            if (!hotkeyService.TryReplaceBinding(
+                    target,
+                    proposed,
+                    out var registrationError))
+            {
+                lastHotkeyRegistrationError =
+                    registrationError ?? "Unknown registration failure.";
+                ShowUiError(lastHotkeyRegistrationError);
+                return;
+            }
+
+            try
+            {
+                var updated = await soundLibraryStore.UpdateHotkeyAsync(
+                    tile.Id,
+                    proposed);
+                tile.ReplaceSound(updated);
+            }
+            catch
+            {
+                hotkeyService.TryReplaceBinding(
+                    target,
+                    previous,
+                    out var rollbackError);
+                if (rollbackError is not null)
+                {
+                    lastHotkeyRegistrationError = rollbackError;
+                }
+
+                throw;
+            }
+
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text = proposed is null
+                ? $"Cleared the hotkey for \"{tile.DisplayName}\"."
+                : $"Assigned {proposed.DisplayText} to "
+                    + $"\"{tile.DisplayName}\" and registered it with "
+                    + "Windows.";
+            lastHotkeyAction = proposed is null
+                ? $"Cleared hotkey for sound {tile.Id}"
+                : $"Assigned {proposed.DisplayText} to sound {tile.Id}";
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"The sound hotkey could not be saved: "
                 + exception.Message);
         }
         finally
         {
-            UpdateControlAvailability();
+            libraryActionGate.Release();
+            UpdateHotkeyPresentation();
         }
+    }
+
+    private async void AssignStopHotkeyButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        var dialog = new HotkeyAssignmentDialog(
+            "Application action: Stop current sound",
+            appSettings.StopSoundHotkey)
+        {
+            Owner = this
+        };
+        if (!ShowHotkeyAssignmentDialog(dialog))
+        {
+            return;
+        }
+
+        await ApplyStopHotkeyAsync(
+            dialog.ClearRequested
+                ? null
+                : dialog.ProposedHotkey);
+    }
+
+    private bool ShowHotkeyAssignmentDialog(
+        HotkeyAssignmentDialog dialog)
+    {
+        var restoreRegistrations = hotkeyService?.Enabled == true;
+        if (restoreRegistrations)
+        {
+            hotkeyService!.SetEnabled(false);
+            UpdateHotkeyPresentation();
+        }
+
+        var accepted = false;
+        try
+        {
+            accepted = dialog.ShowDialog() == true;
+        }
+        finally
+        {
+            if (restoreRegistrations
+                && !isClosing
+                && hotkeyService is not null)
+            {
+                hotkeyService.SetEnabled(true);
+                UpdateHotkeyPresentation();
+            }
+        }
+
+        return accepted;
+    }
+
+    private async void ClearStopHotkeyButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await ApplyStopHotkeyAsync(null);
+    }
+
+    private async Task ApplyStopHotkeyAsync(HotkeyGesture? proposed)
+    {
+        if (hotkeyService is null)
+        {
+            ShowUiError("The global-hotkey service is not initialized.");
+            return;
+        }
+
+        var conflict = FindLocalHotkeyConflict(
+            HotkeyTarget.StopSound,
+            proposed);
+        if (conflict is not null)
+        {
+            ShowUiError(conflict);
+            return;
+        }
+
+        var previous = appSettings.StopSoundHotkey;
+        if (!hotkeyService.TryReplaceBinding(
+                HotkeyTarget.StopSound,
+                proposed,
+                out var registrationError))
+        {
+            lastHotkeyRegistrationError =
+                registrationError ?? "Unknown registration failure.";
+            ShowUiError(lastHotkeyRegistrationError);
+            UpdateHotkeyPresentation();
+            return;
+        }
+
+        try
+        {
+            var updatedSettings = appSettings with
+            {
+                StopSoundHotkey = proposed
+            };
+            settingsSaveDelayCancellation?.Cancel();
+            settingsSaveDelayCancellation?.Dispose();
+            settingsSaveDelayCancellation = null;
+            await settingsStore.SaveAsync(updatedSettings);
+            appSettings = updatedSettings;
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text = proposed is null
+                ? "Cleared the Stop Sound hotkey."
+                : $"Assigned {proposed.DisplayText} to Stop Sound and "
+                    + "registered it with Windows.";
+            lastHotkeyAction = proposed is null
+                ? "Cleared Stop Sound hotkey"
+                : $"Assigned {proposed.DisplayText} to Stop Sound";
+        }
+        catch (Exception exception)
+        {
+            hotkeyService.TryReplaceBinding(
+                HotkeyTarget.StopSound,
+                previous,
+                out var rollbackError);
+            if (rollbackError is not null)
+            {
+                lastHotkeyRegistrationError = rollbackError;
+            }
+
+            ShowUiError(
+                $"The Stop Sound hotkey could not be saved: "
+                + exception.Message);
+        }
+        finally
+        {
+            UpdateHotkeyPresentation();
+        }
+    }
+
+    private string? FindLocalHotkeyConflict(
+        HotkeyTarget target,
+        HotkeyGesture? proposed)
+    {
+        if (proposed is null)
+        {
+            return null;
+        }
+
+        if (target != HotkeyTarget.StopSound
+            && appSettings.StopSoundHotkey == proposed)
+        {
+            return $"{proposed.DisplayText} is already assigned to "
+                + "Stop Sound.";
+        }
+
+        foreach (var tile in soundTiles)
+        {
+            if (target.Kind == HotkeyTargetKind.Sound
+                && tile.Id == target.SoundId)
+            {
+                continue;
+            }
+
+            if (tile.Sound.Hotkey == proposed)
+            {
+                return $"{proposed.DisplayText} is already assigned to "
+                    + $"\"{tile.DisplayName}\".";
+            }
+        }
+
+        return null;
     }
 
     private async void RenameTileButton_Click(
@@ -772,13 +1306,33 @@ public partial class MainWindow : Window
                 await Task.Run(audioEngine.StopSound);
             }
 
-            await soundLibraryStore.RemoveAsync(tile.Id);
+            var target = HotkeyTarget.ForSound(tile.Id);
+            var removedHotkey = tile.Sound.Hotkey;
+            hotkeyService?.RemoveBinding(target);
+            try
+            {
+                await soundLibraryStore.RemoveAsync(tile.Id);
+            }
+            catch
+            {
+                if (removedHotkey is not null)
+                {
+                    hotkeyService?.LoadPersistedBinding(
+                        target,
+                        removedHotkey);
+                }
+
+                throw;
+            }
+
             soundTiles.Remove(tile);
             soundTilesView.Refresh();
             UpdateLibraryPresentation();
             ErrorTextBlock.Text = string.Empty;
             StatusTextBlock.Text =
                 $"Removed \"{tile.DisplayName}\" and its managed copy.";
+            lastHotkeyAction =
+                $"Removed binding for sound {tile.Id} before removal";
             RefreshDiagnosticStatus();
         }
         catch (Exception exception)
@@ -788,6 +1342,7 @@ public partial class MainWindow : Window
         finally
         {
             libraryActionGate.Release();
+            UpdateHotkeyPresentation();
         }
     }
 
@@ -1000,6 +1555,88 @@ public partial class MainWindow : Window
             : Visibility.Visible;
     }
 
+    private void UpdateHotkeyPresentation()
+    {
+        if (hotkeyService is null)
+        {
+            RegisteredHotkeyCountTextBlock.Text = "0 registered";
+            StopHotkeyDisplayTextBlock.Text =
+                appSettings.StopSoundHotkey?.DisplayText ?? "No hotkey";
+            StopHotkeyStateTextBlock.Text = appSettings.StopSoundHotkey is null
+                ? "Not assigned"
+                : "Assigned · registration pending";
+            ClearStopHotkeyButton.IsEnabled =
+                appSettings.StopSoundHotkey is not null;
+            RetryHotkeysButton.IsEnabled = false;
+            return;
+        }
+
+        foreach (var tile in soundTiles)
+        {
+            tile.ApplyHotkeyStatus(
+                hotkeyService.GetStatus(
+                    HotkeyTarget.ForSound(tile.Id)));
+        }
+
+        var statuses = hotkeyService.Statuses;
+        var soundStatuses = statuses
+            .Where(
+                status =>
+                    status.Target.Kind == HotkeyTargetKind.Sound)
+            .ToArray();
+        var assignedSoundCount = soundTiles.Count(
+            tile => tile.Sound.Hotkey is not null);
+        var registeredSoundCount = soundStatuses.Count(
+            status =>
+                status.State == HotkeyRegistrationState.Registered);
+        var unavailableSoundCount = soundStatuses.Count(
+            status =>
+                status.State == HotkeyRegistrationState.Unavailable);
+        var registeredTotal = statuses.Count(
+            status =>
+                status.State == HotkeyRegistrationState.Registered);
+        var unavailableTotal = statuses.Count(
+            status =>
+                status.State == HotkeyRegistrationState.Unavailable);
+
+        RegisteredHotkeyCountTextBlock.Text =
+            $"{registeredTotal} registered";
+        RetryHotkeysButton.IsEnabled =
+            hotkeyService.Enabled && unavailableTotal > 0;
+
+        var stopStatus =
+            hotkeyService.GetStatus(HotkeyTarget.StopSound);
+        StopHotkeyDisplayTextBlock.Text =
+            stopStatus.Hotkey?.DisplayText ?? "No hotkey";
+        StopHotkeyStateTextBlock.Text = stopStatus.State switch
+        {
+            HotkeyRegistrationState.Registered =>
+                "Assigned · registered",
+            HotkeyRegistrationState.Unavailable =>
+                "Assigned · unavailable",
+            HotkeyRegistrationState.Disabled =>
+                "Assigned · global hotkeys disabled",
+            _ => "Not assigned"
+        };
+        StopHotkeyStateTextBlock.ToolTip = stopStatus.Error;
+        ClearStopHotkeyButton.IsEnabled = stopStatus.Hotkey is not null;
+
+        HotkeyStatusTextBlock.Text = hotkeyService.Enabled
+            ? $"{assignedSoundCount} sound hotkey(s) assigned; "
+                + $"{registeredSoundCount} registered; "
+                + $"{unavailableSoundCount} unavailable. Stop Sound: "
+                + StopHotkeyStateTextBlock.Text + "."
+            : $"{assignedSoundCount} sound hotkey(s) assigned and preserved. "
+                + "Global registration is disabled.";
+
+        if (hotkeyService.LastRegistrationError is { } registrationError)
+        {
+            lastHotkeyRegistrationError = registrationError;
+        }
+
+        RefreshDiagnosticStatus();
+    }
+
     private void UpdateVirtualCableStatus(AudioDeviceSnapshot snapshot)
     {
         var likelyRender = snapshot.RenderEndpoints
@@ -1144,6 +1781,16 @@ public partial class MainWindow : Window
 
     private void RefreshDiagnosticStatus()
     {
+        var hotkeyStatuses = hotkeyService?.Statuses
+            ?? [];
+        var soundHotkeyStatuses = hotkeyStatuses
+            .Where(
+                status =>
+                    status.Target.Kind == HotkeyTargetKind.Sound)
+            .ToArray();
+        var stopHotkeyStatus = hotkeyService?.GetStatus(
+            HotkeyTarget.StopSound);
+
         var lines = new List<string>
         {
             $"Engine state: {audioEngine.State}",
@@ -1158,6 +1805,31 @@ public partial class MainWindow : Window
                     : currentSoundSessionId)}",
             $"Monitoring enabled setting: "
                 + $"{YesNo(MonitorSoundsCheckBox.IsChecked == true)}",
+            $"Global hotkeys enabled: "
+                + $"{YesNo(appSettings.GlobalHotkeysEnabled)}",
+            $"Assigned sound hotkeys: "
+                + $"{soundTiles.Count(tile => tile.Sound.Hotkey is not null)}",
+            $"Registered sound hotkeys: "
+                + $"{soundHotkeyStatuses.Count(
+                    status =>
+                        status.State
+                        == HotkeyRegistrationState.Registered)}",
+            $"Unavailable sound hotkeys: "
+                + $"{soundHotkeyStatuses.Count(
+                    status =>
+                        status.State
+                        == HotkeyRegistrationState.Unavailable)}",
+            $"Stop Sound hotkey state: "
+                + $"{stopHotkeyStatus?.State.ToString() ?? "NotAssigned"}"
+                + (stopHotkeyStatus?.Hotkey is null
+                    ? string.Empty
+                    : $" ({stopHotkeyStatus.Hotkey.DisplayText})"),
+            $"Last hotkey action: {lastHotkeyAction}",
+            $"Last registration error: {lastHotkeyRegistrationError}",
+            $"Last triggered sound ID: "
+                + $"{lastTriggeredSoundId?.ToString() ?? "None"}",
+            $"Last trigger source: "
+                + $"{lastSoundTriggerSource?.ToString() ?? "None"}",
             "Windows defaults changed by app: No",
             string.Empty
         };
@@ -1335,6 +2007,8 @@ public partial class MainWindow : Window
             MonitorOutputEndpointId =
                 (MonitorOutputComboBox.SelectedItem as AudioEndpoint)?.DeviceId,
             MonitorVolume = MonitorVolumeSlider.Value / 100d,
+            GlobalHotkeysEnabled =
+                GlobalHotkeysCheckBox.IsChecked == true,
             MicrophoneVolume = MicrophoneVolumeSlider.Value / 100d,
             MicrophoneMuted =
                 MuteMicrophoneCheckBox.IsChecked == true,
@@ -1435,6 +2109,23 @@ public partial class MainWindow : Window
 
         try
         {
+            if (hotkeyService is not null)
+            {
+                hotkeyService.HotkeyInvoked -=
+                    HotkeyService_HotkeyInvoked;
+                hotkeyService.Dispose();
+                hotkeyService = null;
+            }
+        }
+        catch (Exception exception)
+        {
+            shutdownErrors.Add(
+                "Global hotkeys could not be fully unregistered: "
+                + exception.Message);
+        }
+
+        try
+        {
             UpdateSettingsFromUi();
             await settingsStore.SaveAsync(appSettings);
         }
@@ -1446,12 +2137,13 @@ public partial class MainWindow : Window
 
         try
         {
-            await Task.Run(audioEngine.Dispose);
+            await soundTriggerGate.WaitAsync();
+            soundTriggerGate.Release();
         }
         catch (Exception exception)
         {
             shutdownErrors.Add(
-                "Audio devices could not be released cleanly: "
+                "A sound trigger did not finish cleanly: "
                 + exception.Message);
         }
 
@@ -1467,6 +2159,17 @@ public partial class MainWindow : Window
                 + exception.Message);
         }
 
+        try
+        {
+            await Task.Run(audioEngine.Dispose);
+        }
+        catch (Exception exception)
+        {
+            shutdownErrors.Add(
+                "Audio devices could not be released cleanly: "
+                + exception.Message);
+        }
+
         audioEngine.StateChanged -= AudioEngine_StateChanged;
         audioEngine.ErrorOccurred -= AudioEngine_ErrorOccurred;
         audioEngine.PeakLevelsChanged -= AudioEngine_PeakLevelsChanged;
@@ -1475,6 +2178,7 @@ public partial class MainWindow : Window
         await soundLibraryStore.DisposeAsync();
         await settingsStore.DisposeAsync();
         libraryActionGate.Dispose();
+        soundTriggerGate.Dispose();
 
         if (shutdownErrors.Count > 0)
         {
@@ -1546,5 +2250,11 @@ public partial class MainWindow : Window
         return value is { } active
             ? YesNo(active)
             : "N/A (no active monitor sound branch)";
+    }
+
+    private enum SoundTriggerSource
+    {
+        Mouse,
+        Hotkey
     }
 }

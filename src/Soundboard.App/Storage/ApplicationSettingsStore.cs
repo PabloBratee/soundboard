@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using Soundboard.App.Hotkeys;
 
 namespace Soundboard.App.Storage;
 
@@ -51,9 +52,12 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
                     stream,
                     JsonOptions,
                     cancellationToken);
+            var validated = Validate(
+                settings ?? ApplicationSettings.Default,
+                out var warning);
             return (
-                Validate(settings ?? ApplicationSettings.Default),
-                null);
+                validated,
+                warning);
         }
         catch (Exception exception)
             when (exception is JsonException
@@ -92,7 +96,7 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
                 {
                     await JsonSerializer.SerializeAsync(
                         stream,
-                        Validate(settings),
+                        Validate(settings, out _),
                         JsonOptions,
                         cancellationToken);
                     await stream.FlushAsync(cancellationToken);
@@ -134,8 +138,24 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
     }
 
     private static ApplicationSettings Validate(
-        ApplicationSettings settings)
+        ApplicationSettings settings,
+        out string? warning)
     {
+        HotkeyGesture? stopSoundHotkey = null;
+        if (!HotkeyGesture.TryNormalize(
+                settings.StopSoundHotkey,
+                out stopSoundHotkey,
+                out var hotkeyError))
+        {
+            warning =
+                "The saved Stop Sound hotkey is invalid and was ignored: "
+                + hotkeyError;
+        }
+        else
+        {
+            warning = null;
+        }
+
         return settings with
         {
             MicrophoneVolume = Math.Clamp(
@@ -144,6 +164,7 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
                 2d),
             SoundVolume = Math.Clamp(settings.SoundVolume, 0d, 2d),
             MonitorVolume = Math.Clamp(settings.MonitorVolume, 0d, 2d),
+            StopSoundHotkey = stopSoundHotkey,
             WindowWidth = ValidateDimension(
                 settings.WindowWidth,
                 minimum: 760d),

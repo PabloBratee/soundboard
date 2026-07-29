@@ -1,13 +1,14 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Soundboard.App.Hotkeys;
 using Soundboard.Audio;
 
 namespace Soundboard.App.Storage;
 
 public sealed class SoundLibraryStore : IAsyncDisposable
 {
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -212,6 +213,62 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
     }
 
+    public async Task<SoundLibraryEntry> UpdateHotkeyAsync(
+        Guid soundId,
+        HotkeyGesture? hotkey,
+        CancellationToken cancellationToken = default)
+    {
+        HotkeyGesture? normalizedHotkey = null;
+        if (!HotkeyGesture.TryNormalize(
+                hotkey,
+                out normalizedHotkey,
+                out var validationError))
+        {
+            throw new ArgumentException(
+                validationError,
+                nameof(hotkey));
+        }
+
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            EnsureLoaded();
+
+            var index = entries.FindIndex(sound => sound.Id == soundId);
+            if (index < 0)
+            {
+                throw new KeyNotFoundException(
+                    "The sound no longer exists in the library.");
+            }
+
+            if (normalizedHotkey is not null
+                && entries.Any(
+                    sound =>
+                        sound.Id != soundId
+                        && sound.Hotkey == normalizedHotkey))
+            {
+                throw new InvalidOperationException(
+                    $"{normalizedHotkey.DisplayText} is already assigned "
+                    + "to another sound.");
+            }
+
+            var updated = entries[index] with
+            {
+                Hotkey = normalizedHotkey
+            };
+            var updatedEntries = entries.ToList();
+            updatedEntries[index] = updated;
+            await SaveEntriesCoreAsync(updatedEntries, cancellationToken);
+            entries[index] = updated;
+            return updated;
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
     public async Task RemoveAsync(
         Guid soundId,
         CancellationToken cancellationToken = default)
@@ -361,15 +418,77 @@ public sealed class SoundLibraryStore : IAsyncDisposable
 
             var result = new List<SoundLibraryEntry>();
             var ids = new HashSet<Guid>();
+            var hotkeys = new Dictionary<HotkeyGesture, Guid>();
             foreach (var element in soundsElement.EnumerateArray())
             {
                 try
                 {
-                    var entry = element.Deserialize<SoundLibraryEntry>(
-                        JsonOptions)
+                    var serialized =
+                        element.Deserialize<SoundLibraryEntryDocument>(
+                            JsonOptions)
                         ?? throw new JsonException("The entry was null.");
+                    HotkeyGesture? hotkey = null;
+                    if (serialized.Hotkey is { } hotkeyElement
+                        && hotkeyElement.ValueKind
+                            is not JsonValueKind.Null
+                            and not JsonValueKind.Undefined)
+                    {
+                        try
+                        {
+                            var candidate =
+                                hotkeyElement.Deserialize<HotkeyGesture>(
+                                    JsonOptions);
+                            if (!HotkeyGesture.TryNormalize(
+                                    candidate,
+                                    out hotkey,
+                                    out var hotkeyError))
+                            {
+                                warnings.Add(
+                                    $"Sound {serialized.Id} was loaded "
+                                    + "without its invalid hotkey: "
+                                    + hotkeyError);
+                                hotkey = null;
+                            }
+                        }
+                        catch (JsonException exception)
+                        {
+                            warnings.Add(
+                                $"Sound {serialized.Id} was loaded without "
+                                + "its invalid hotkey: "
+                                + exception.Message);
+                        }
+                    }
+
+                    if (hotkey is not null
+                        && hotkeys.TryGetValue(
+                            hotkey,
+                            out var conflictingSoundId))
+                    {
+                        warnings.Add(
+                            $"Sound {serialized.Id} was loaded without "
+                            + $"hotkey {hotkey.DisplayText} because it "
+                            + "duplicates the assignment for sound "
+                            + $"{conflictingSoundId}.");
+                        hotkey = null;
+                    }
+
+                    var entry = new SoundLibraryEntry(
+                        serialized.Id,
+                        serialized.DisplayName,
+                        serialized.ManagedFileName,
+                        serialized.OriginalFileName,
+                        serialized.FileType,
+                        serialized.Duration,
+                        serialized.ImportedAtUtc,
+                        serialized.SortOrder,
+                        serialized.ContentHash,
+                        hotkey);
                     ValidateEntry(entry, ids);
                     result.Add(entry);
+                    if (hotkey is not null)
+                    {
+                        hotkeys.Add(hotkey, entry.Id);
+                    }
                 }
                 catch (Exception exception)
                     when (exception is JsonException
@@ -540,7 +659,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 details.Duration,
                 DateTimeOffset.UtcNow,
                 entries.Count + imported.Count,
-                contentHash));
+                contentHash,
+                Hotkey: null));
     }
 
     private async Task SaveEntriesCoreAsync(
@@ -681,4 +801,16 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     private sealed record SoundLibraryDocument(
         int SchemaVersion,
         IReadOnlyList<SoundLibraryEntry> Sounds);
+
+    private sealed record SoundLibraryEntryDocument(
+        Guid Id,
+        string DisplayName,
+        string ManagedFileName,
+        string OriginalFileName,
+        string FileType,
+        TimeSpan Duration,
+        DateTimeOffset ImportedAtUtc,
+        int SortOrder,
+        string ContentHash,
+        JsonElement? Hotkey);
 }

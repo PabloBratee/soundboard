@@ -1,3 +1,5 @@
+using Soundboard.App.Hotkeys;
+
 namespace Soundboard.App.Storage;
 
 public sealed record ApplicationSettings
@@ -17,6 +19,10 @@ public sealed record ApplicationSettings
     public string? MonitorOutputEndpointId { get; init; }
 
     public double MonitorVolume { get; init; } = 1d;
+
+    public bool GlobalHotkeysEnabled { get; init; } = true;
+
+    public HotkeyGesture? StopSoundHotkey { get; init; }
 
     public double? WindowLeft { get; init; }
 

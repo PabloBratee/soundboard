@@ -17,6 +17,8 @@ audio endpoint for Discord or a game.
 - provides independent monitor volume and monitor-output peak metering;
 - imports multiple audio files into a persistent local library;
 - supports drag-and-drop import, tile playback, search, rename, and remove;
+- supports one optional persistent Windows global hotkey per sound plus an
+  optional Stop Sound hotkey;
 - detects duplicate content with a SHA-256 hash; and
 - exposes engine, endpoint, mixer-format, overflow, playback, error, and
   library-path diagnostics.
@@ -54,7 +56,9 @@ Runtime data is stored under the current user's local application-data folder:
 
 `library.json` stores a schema version and sound records containing a stable
 ID, display name, managed filename, original filename, WAV/MP3 type, duration,
-UTC import date, sort order, and SHA-256 content hash. JSON saves use a
+UTC import date, sort order, SHA-256 content hash, and an optional hotkey.
+`settings.json` stores the global-hotkey enabled state and optional Stop Sound
+hotkey alongside the existing audio and window settings. JSON saves use a
 temporary file and atomic replacement. A malformed library file is preserved
 as `library.malformed-<timestamp>.json` before Soundboard creates an empty
 library.
@@ -226,6 +230,66 @@ the mixer input, disposes the reader/session, and clears playback only when the
 completed session is still current. A stale callback from a stopped or replaced
 session cannot alter a newer session.
 
+## Global soundboard hotkeys
+
+Global hotkeys let a sound tile be triggered while Notepad, Discord, a game, or
+another application has focus. Soundboard must remain running for its hotkeys
+to be active. The audio engine must also be started manually before a sound
+hotkey can play audio; a hotkey never starts the engine, opens devices, changes
+Windows settings, or steals foreground focus.
+
+Each sound has an **Assign hotkey** action and shows one of these explicit
+states:
+
+- assigned and registered;
+- assigned but unavailable;
+- assigned while global hotkeys are disabled; or
+- not assigned.
+
+The assignment dialog captures one proposed combination only while its capture
+area has focus. Select **Save** to ask Windows to register it, **Clear hotkey**
+to remove the assignment, or **Cancel** (or press Escape) to leave the previous
+assignment unchanged. Renaming a sound preserves its stable ID and hotkey.
+Removing a sound unregisters its binding before its managed metadata and audio
+copy are removed.
+
+The compact **Global hotkeys** section provides:
+
+- **Enable global hotkeys**, which unregisters every binding when disabled but
+  preserves the assignments in JSON for re-registration when enabled again;
+- an optional **Stop current sound** hotkey, which stops only the sound effect
+  and leaves the microphone engine and both configured outputs running;
+- **Retry unavailable hotkeys**, which makes one explicit retry without
+  continuously polling in the background; and
+- assigned, registered, and unavailable state text plus registration counts.
+
+Supported combinations use Ctrl, Alt, Shift, and/or the Windows key with
+letters, numbers, numpad digits, arrows, navigation keys, Escape, Enter, Space,
+Tab, Backspace, Delete, or F1–F12. These ordinary keys require at least one
+modifier so Soundboard cannot claim normal typing keys. F13–F24 may be assigned
+without a modifier for dedicated macro-key devices. Modifier-only and unknown
+keys are rejected.
+
+Soundboard rejects duplicates between sounds and the Stop Sound action before
+asking Windows. Windows may also refuse a combination because it is reserved
+or already owned by another application. A failed new assignment is not
+persisted, and a failed replacement restores the previous working assignment
+where Windows permits it. Persisted assignments that are unavailable during
+startup remain assigned and can be retried later; their sound tiles still work
+with the mouse.
+
+Registrations use the Windows `RegisterHotKey` API with `MOD_NOREPEAT`.
+Therefore only explicitly registered combinations produce callbacks, and
+holding a combination does not continuously restart a sound. Soundboard uses
+`UnregisterHotKey` when a binding is cleared, removed, disabled, replaced, or
+closed.
+
+Soundboard does not use a low-level keyboard hook, raw keyboard input, keyboard
+polling, simulated keystrokes, or administrator privileges. It does not record
+keypress history, log unassigned keys, capture text typed into other
+applications, or send input to Discord or games. Hotkey capture occurs only
+inside the visible assignment dialog while that dialog has focus.
+
 ## Configure Discord manually
 
 Soundboard does not change Discord settings. In Discord **Voice & Video**:
@@ -281,7 +345,8 @@ service the selected endpoints reliably at that time.
 - one WAV or MP3 sound effect at a time;
 - mono/stereo sources and mono/stereo output only;
 - no categories, favorites, custom tile images, or custom tile colors;
-- no hotkeys, profiles, trimming, waveform editor, fades, or normalization;
+- no hotkey profiles, per-game profiles, trimming, waveform editor, fades, or
+  normalization;
 - no gate, compression, limiter, or other audio processing;
 - no microphone or system-audio monitoring through physical headphones;
 - no system-audio capture or Discord-output capture;

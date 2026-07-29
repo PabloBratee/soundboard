@@ -282,6 +282,91 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel>
+                            <TextBlock FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Text="Global hotkeys" />
+                            <CheckBox x:Name="GlobalHotkeysCheckBox"
+                                      Margin="0,9,0,0"
+                                      Content="Enable global hotkeys" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1"
+                                    HorizontalAlignment="Right">
+                            <TextBlock x:Name="RegisteredHotkeyCountTextBlock"
+                                       FontWeight="SemiBold"
+                                       Text="0 registered" />
+                            <Button x:Name="RetryHotkeysButton"
+                                    Margin="0,8,0,0"
+                                    Padding="10,5"
+                                    Click="RetryHotkeysButton_Click"
+                                    Content="Retry unavailable hotkeys" />
+                        </StackPanel>
+
+                        <Grid Grid.Row="1"
+                              Grid.ColumnSpan="2"
+                              Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="155" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock FontWeight="SemiBold"
+                                       Text="Stop current sound" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock x:Name="StopHotkeyDisplayTextBlock"
+                                           Text="No hotkey" />
+                                <TextBlock x:Name="StopHotkeyStateTextBlock"
+                                           Margin="0,3,0,0"
+                                           Foreground="#4A5562"
+                                           Text="Not assigned" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2"
+                                        Orientation="Horizontal">
+                                <Button Padding="10,5"
+                                        Click="AssignStopHotkeyButton_Click"
+                                        Content="Assign Stop Sound hotkey" />
+                                <Button x:Name="ClearStopHotkeyButton"
+                                        Margin="8,0,0,0"
+                                        Padding="10,5"
+                                        Click="ClearStopHotkeyButton_Click"
+                                        Content="Clear Stop Sound hotkey" />
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock x:Name="HotkeyStatusTextBlock"
+                                   Grid.Row="2"
+                                   Grid.ColumnSpan="2"
+                                   Margin="0,12,0,0"
+                                   Text="Hotkeys are initializing."
+                                   TextWrapping="Wrap" />
+                        <TextBlock Grid.Row="3"
+                                   Grid.ColumnSpan="2"
+                                   Margin="0,7,0,0"
+                                   Foreground="#4A5562"
+                                   Text="Only explicitly registered combinations are received. Soundboard does not monitor or record other keyboard input."
+                                   TextWrapping="Wrap" />
+                    </Grid>
+                </Border>
+
+                <Border Margin="0,0,0,14"
+                        Padding="14"
+                        Background="White"
+                        BorderBrush="#D6DBE1"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -379,8 +464,8 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Border x:Name="TileBorder"
-                                            Width="205"
-                                            MinHeight="142"
+                                            Width="222"
+                                            MinHeight="192"
                                             Margin="7"
                                             Padding="10"
                                             Background="White"
@@ -414,6 +499,16 @@
                                                                FontWeight="SemiBold"
                                                                Text="{Binding PlayingLabel}"
                                                                TextAlignment="Left" />
+                                                    <TextBlock Margin="0,10,0,0"
+                                                               FontWeight="SemiBold"
+                                                               Text="{Binding HotkeyDisplayText}"
+                                                               TextAlignment="Left" />
+                                                    <TextBlock Margin="0,3,0,0"
+                                                               Foreground="#596574"
+                                                               Text="{Binding HotkeyStateText}"
+                                                               TextAlignment="Left"
+                                                               TextWrapping="Wrap"
+                                                               ToolTip="{Binding HotkeyError}" />
                                                 </StackPanel>
                                             </Button>
                                             <Separator Grid.Row="1"
@@ -422,6 +517,11 @@
                                                         HorizontalAlignment="Right"
                                                         Orientation="Horizontal">
                                                 <Button Padding="8,4"
+                                                        Click="AssignTileHotkeyButton_Click"
+                                                        Content="Assign hotkey"
+                                                        Tag="{Binding}" />
+                                                <Button Padding="8,4"
+                                                        Margin="7,0,0,0"
                                                         Click="RenameTileButton_Click"
                                                         Content="Rename"
                                                         Tag="{Binding}" />

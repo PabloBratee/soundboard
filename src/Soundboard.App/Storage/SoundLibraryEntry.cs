@@ -1,3 +1,5 @@
+using Soundboard.App.Hotkeys;
+
 namespace Soundboard.App.Storage;
 
 public sealed record SoundLibraryEntry(
@@ -9,4 +11,5 @@ public sealed record SoundLibraryEntry(
     TimeSpan Duration,
     DateTimeOffset ImportedAtUtc,
     int SortOrder,
-    string ContentHash);
+    string ContentHash,
+    HotkeyGesture? Hotkey = null);
