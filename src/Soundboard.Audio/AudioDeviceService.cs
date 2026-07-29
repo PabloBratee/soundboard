@@ -45,6 +45,29 @@ public sealed class AudioDeviceService
                     || friendlyName.Contains(" Output", StringComparison.OrdinalIgnoreCase)));
     }
 
+    public AudioFormatInfo GetEndpointMixFormat(
+        string endpointId,
+        AudioDeviceDirection expectedDirection)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpointId);
+
+        using var enumerator = new MMDeviceEnumerator();
+        using var device = enumerator.GetDevice(endpointId);
+        var expectedDataFlow = expectedDirection == AudioDeviceDirection.Capture
+            ? DataFlow.Capture
+            : DataFlow.Render;
+
+        if (device.DataFlow != expectedDataFlow)
+        {
+            throw new InvalidOperationException(
+                $"Endpoint \"{device.FriendlyName}\" is not a "
+                + $"{expectedDirection.ToString().ToLowerInvariant()} "
+                + "endpoint.");
+        }
+
+        return AudioFormatInfo.FromWaveFormat(device.AudioClient.MixFormat);
+    }
+
     private static string? GetDefaultCaptureDeviceId(
         MMDeviceEnumerator enumerator,
         ICollection<string> warnings)
