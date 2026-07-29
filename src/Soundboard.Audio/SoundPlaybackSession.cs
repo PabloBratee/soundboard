@@ -10,12 +10,17 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
     private readonly VolumeSampleProvider volumeProvider;
     private Exception? playbackError;
     private bool disposed;
+    private int completionQueued;
 
     public SoundPlaybackSession(
+        Guid soundId,
+        long sessionId,
         string filePath,
         WaveFormat targetFormat,
         float volume)
     {
+        SoundId = soundId;
+        SessionId = sessionId;
         reader = new AudioFileReader(filePath);
 
         try
@@ -39,6 +44,10 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
     }
 
     public WaveFormat WaveFormat => volumeProvider.WaveFormat;
+
+    public Guid SoundId { get; }
+
+    public long SessionId { get; }
 
     public Exception? PlaybackError
     {
@@ -94,6 +103,11 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
         return samplesRead;
     }
 
+    public bool TryQueueCompletion()
+    {
+        return Interlocked.Exchange(ref completionQueued, 1) == 0;
+    }
+
     public void Dispose()
     {
         lock (syncRoot)
@@ -107,5 +121,4 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
             reader.Dispose();
         }
     }
-
 }

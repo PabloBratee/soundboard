@@ -23,6 +23,7 @@ public sealed class AudioMixEngine : IDisposable
     private bool disposed;
     private int stateValue = (int)AudioEngineState.Stopped;
     private int faultCleanupQueued;
+    private long soundSessionGeneration;
     private long microphoneBufferOverflowCount;
     private float microphonePeak;
     private float mixedOutputPeak;
@@ -47,6 +48,9 @@ public sealed class AudioMixEngine : IDisposable
 
     public bool IsSoundPlaying =>
         Volatile.Read(ref currentSound) is not null;
+
+    public Guid? CurrentSoundId =>
+        Volatile.Read(ref currentSound)?.SoundId;
 
     public float MicrophoneVolume
     {
@@ -184,8 +188,15 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
-    public void PlaySound(string filePath)
+    public void PlaySound(Guid soundId, string filePath)
     {
+        if (soundId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "A stable sound ID is required.",
+                nameof(soundId));
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
         var extension = Path.GetExtension(filePath);
@@ -213,7 +224,11 @@ public sealed class AudioMixEngine : IDisposable
 
             try
             {
+                var sessionId = Interlocked.Increment(
+                    ref soundSessionGeneration);
                 session = new SoundPlaybackSession(
+                    soundId,
+                    sessionId,
                     filePath,
                     resources.TargetFormat,
                     soundVolume);
@@ -221,7 +236,8 @@ public sealed class AudioMixEngine : IDisposable
                 currentSound = session;
                 resources.Mixer.AddMixerInput(session);
                 RaiseSoundPlaybackStateChanged(
-                    SoundPlaybackChangeReason.Started);
+                    SoundPlaybackChangeReason.Started,
+                    session);
             }
             catch (Exception exception)
             {
@@ -596,6 +612,11 @@ public sealed class AudioMixEngine : IDisposable
             return;
         }
 
+        if (!session.TryQueueCompletion())
+        {
+            return;
+        }
+
         ThreadPool.QueueUserWorkItem(
             _ => OnSoundPlaybackCompleted(
                 session,
@@ -630,7 +651,8 @@ public sealed class AudioMixEngine : IDisposable
             currentSound = null;
             session.Dispose();
             RaiseSoundPlaybackStateChanged(
-                SoundPlaybackChangeReason.Completed);
+                SoundPlaybackChangeReason.Completed,
+                session);
         }
 
         if (exception is not null)
@@ -689,7 +711,8 @@ public sealed class AudioMixEngine : IDisposable
         if (raiseEvent)
         {
             RaiseSoundPlaybackStateChanged(
-                SoundPlaybackChangeReason.Stopped);
+                SoundPlaybackChangeReason.Stopped,
+                session);
         }
     }
 
@@ -767,11 +790,15 @@ public sealed class AudioMixEngine : IDisposable
     }
 
     private void RaiseSoundPlaybackStateChanged(
-        SoundPlaybackChangeReason reason)
+        SoundPlaybackChangeReason reason,
+        SoundPlaybackSession session)
     {
         SoundPlaybackStateChanged?.Invoke(
             this,
-            new SoundPlaybackStateChangedEventArgs(reason));
+            new SoundPlaybackStateChangedEventArgs(
+                reason,
+                session.SoundId,
+                session.SessionId));
     }
 
     private void ThrowIfDisposed()

@@ -32,9 +32,15 @@ public enum SoundPlaybackChangeReason
 }
 
 public sealed class SoundPlaybackStateChangedEventArgs(
-    SoundPlaybackChangeReason reason) : EventArgs
+    SoundPlaybackChangeReason reason,
+    Guid soundId,
+    long sessionId) : EventArgs
 {
     public SoundPlaybackChangeReason Reason { get; } = reason;
+
+    public Guid SoundId { get; } = soundId;
+
+    public long SessionId { get; } = sessionId;
 
     public bool IsPlaying => Reason == SoundPlaybackChangeReason.Started;
 }
