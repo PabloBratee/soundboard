@@ -19,14 +19,17 @@ public sealed class AudioMixEngine : IDisposable
     private AudioMixEngineDiagnostics? diagnostics;
     private float microphoneVolume = 1f;
     private float soundVolume = 1f;
+    private float monitorVolume = 1f;
     private bool microphoneMuted;
     private bool disposed;
     private int stateValue = (int)AudioEngineState.Stopped;
     private int faultCleanupQueued;
+    private int monitorFaultCleanupQueued;
     private long soundSessionGeneration;
     private long microphoneBufferOverflowCount;
     private float microphonePeak;
     private float mixedOutputPeak;
+    private float monitorOutputPeak;
 
     public event EventHandler<AudioEngineStateChangedEventArgs>? StateChanged;
 
@@ -117,18 +120,43 @@ public sealed class AudioMixEngine : IDisposable
 
                 if (currentSound is not null)
                 {
-                    currentSound.Volume = value;
+                    currentSound.SetVirtualVolume(value);
                 }
+            }
+        }
+    }
+
+    public float MonitorVolume
+    {
+        get
+        {
+            lock (lifecycleLock)
+            {
+                return monitorVolume;
+            }
+        }
+
+        set
+        {
+            ValidateVolume(value, nameof(value));
+
+            lock (lifecycleLock)
+            {
+                ThrowIfDisposed();
+                monitorVolume = value;
+                currentSound?.SetMonitorVolume(value);
             }
         }
     }
 
     public void Start(
         string microphoneEndpointId,
-        string renderEndpointId)
+        string renderEndpointId,
+        AudioMonitorConfiguration monitorConfiguration)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(microphoneEndpointId);
         ArgumentException.ThrowIfNullOrWhiteSpace(renderEndpointId);
+        ArgumentNullException.ThrowIfNull(monitorConfiguration);
 
         lock (lifecycleLock)
         {
@@ -143,6 +171,7 @@ public sealed class AudioMixEngine : IDisposable
             SetState(AudioEngineState.Starting);
             Interlocked.Exchange(ref microphoneBufferOverflowCount, 0);
             Interlocked.Exchange(ref faultCleanupQueued, 0);
+            Interlocked.Exchange(ref monitorFaultCleanupQueued, 0);
             ResetPeakLevels();
 
             AudioPipelineResources? newResources = null;
@@ -151,15 +180,37 @@ public sealed class AudioMixEngine : IDisposable
             {
                 newResources = CreatePipeline(
                     microphoneEndpointId,
-                    renderEndpointId);
+                    renderEndpointId,
+                    monitorConfiguration);
 
                 resources = newResources;
                 diagnostics = newResources.Diagnostics;
                 ApplyMicrophoneVolume();
 
                 newResources.Output.Play();
+                if (newResources.Monitor is not null)
+                {
+                    try
+                    {
+                        newResources.Monitor.Output.Play();
+                    }
+                    catch (Exception exception)
+                    {
+                        DisableMonitorPipelineCore(
+                            newResources,
+                            "Monitoring could not start and was disabled for "
+                            + $"this engine session: {exception.Message}",
+                            reportError: false);
+                    }
+                }
+
                 newResources.Capture.StartRecording();
                 SetState(AudioEngineState.Running);
+
+                if (diagnostics?.LastMonitorWarningOrError is { } warning)
+                {
+                    ReportError(warning, isRecoverable: true);
+                }
             }
             catch (Exception exception)
             {
@@ -234,14 +285,59 @@ public sealed class AudioMixEngine : IDisposable
                     soundVolume);
 
                 currentSound = session;
-                resources.Mixer.AddMixerInput(session);
+                resources.Mixer.AddMixerInput(session.VirtualBranch);
+
+                if (resources.Monitor is not null)
+                {
+                    try
+                    {
+                        var monitorBranch = new SoundPlaybackBranch(
+                            SoundPlaybackBranchRole.MonitorOutput,
+                            filePath,
+                            resources.Monitor.TargetFormat,
+                            monitorVolume);
+                        session.AttachMonitorBranch(monitorBranch);
+                        resources.Monitor.Mixer.AddMixerInput(monitorBranch);
+                    }
+                    catch (Exception exception)
+                    {
+                        DisableMonitorPipelineCore(
+                            resources,
+                            "Sound monitoring failed while preparing the "
+                            + "sound and was disabled for this engine session. "
+                            + "The sound will still be sent to the virtual "
+                            + $"microphone: {exception.Message}");
+                    }
+                }
+
+                UpdatePlaybackDiagnostics(session);
                 RaiseSoundPlaybackStateChanged(
                     SoundPlaybackChangeReason.Started,
                     session);
             }
             catch (Exception exception)
             {
-                session?.Dispose();
+                if (session is not null)
+                {
+                    if (ReferenceEquals(currentSound, session))
+                    {
+                        currentSound = null;
+                    }
+
+                    resources.Mixer.RemoveMixerInput(
+                        session.VirtualBranch);
+                    var monitorBranch = session.DetachMonitorBranch();
+                    if (monitorBranch is not null)
+                    {
+                        resources.Monitor?.Mixer.RemoveMixerInput(
+                            monitorBranch);
+                        monitorBranch.Dispose();
+                    }
+
+                    session.Dispose();
+                    ClearPlaybackDiagnostics();
+                }
+
                 var message =
                     $"The sound file could not be played: {exception.Message}";
                 ReportError(message, isRecoverable: true);
@@ -277,7 +373,8 @@ public sealed class AudioMixEngine : IDisposable
 
     private AudioPipelineResources CreatePipeline(
         string microphoneEndpointId,
-        string renderEndpointId)
+        string renderEndpointId,
+        AudioMonitorConfiguration monitorConfiguration)
     {
         using var enumerator = new MMDeviceEnumerator();
         MMDevice? microphoneDevice = null;
@@ -393,7 +490,14 @@ public sealed class AudioMixEngine : IDisposable
                 AudioFormatInfo.FromWaveFormat(targetFormat),
                 microphoneResamplingActive,
                 microphoneChannelConversionActive,
-                MicrophoneBufferCapacity);
+                MicrophoneBufferCapacity)
+            {
+                MonitoringEnabled = monitorConfiguration.Enabled,
+                MonitorEndpointId = monitorConfiguration.EndpointId,
+                MonitorInitializationStatus = monitorConfiguration.Enabled
+                    ? "Not initialized"
+                    : "Disabled by setting"
+            };
 
             var pipeline = new AudioPipelineResources(
                 microphoneDevice,
@@ -408,6 +512,56 @@ public sealed class AudioMixEngine : IDisposable
                 targetFormat,
                 pipelineDiagnostics);
 
+            if (monitorConfiguration.Enabled)
+            {
+                if (string.IsNullOrWhiteSpace(monitorConfiguration.EndpointId))
+                {
+                    pipeline.Diagnostics = pipeline.Diagnostics with
+                    {
+                        MonitorInitializationStatus = "Unavailable",
+                        LastMonitorWarningOrError =
+                            "Sound monitoring was requested, but no physical "
+                            + "monitor output is selected. The virtual "
+                            + "microphone will continue without monitoring."
+                    };
+                }
+                else
+                {
+                    try
+                    {
+                        pipeline.Monitor = CreateMonitorPipeline(
+                            enumerator,
+                            monitorConfiguration.EndpointId,
+                            renderDevice.ID);
+                        pipeline.Diagnostics = pipeline.Diagnostics with
+                        {
+                            MonitorFriendlyName =
+                                pipeline.Monitor.Device.FriendlyName,
+                            MonitorEndpointId = pipeline.Monitor.Device.ID,
+                            MonitorMixFormat =
+                                AudioFormatInfo.FromWaveFormat(
+                                    pipeline.Monitor.MixFormat),
+                            MonitorTargetFormat =
+                                AudioFormatInfo.FromWaveFormat(
+                                    pipeline.Monitor.TargetFormat),
+                            MonitorInitializationStatus = "Ready"
+                        };
+                    }
+                    catch (Exception exception)
+                    {
+                        pipeline.Diagnostics = pipeline.Diagnostics with
+                        {
+                            MonitorInitializationStatus = "Unavailable",
+                            LastMonitorWarningOrError =
+                                "Sound monitoring could not be initialized "
+                                + "and was disabled for this engine session. "
+                                + "The virtual microphone remains available: "
+                                + exception.Message
+                        };
+                    }
+                }
+            }
+
             microphoneDevice = null;
             renderDevice = null;
             capture = null;
@@ -418,6 +572,15 @@ public sealed class AudioMixEngine : IDisposable
             pipeline.Output.PlaybackStopped += Output_PlaybackStopped;
             microphoneMeter.StreamVolume += MicrophoneMeter_StreamVolume;
             outputMeter.StreamVolume += OutputMeter_StreamVolume;
+            if (pipeline.Monitor is not null)
+            {
+                pipeline.Monitor.Output.PlaybackStopped +=
+                    MonitorOutput_PlaybackStopped;
+                pipeline.Monitor.Mixer.MixerInputEnded +=
+                    MonitorMixer_MixerInputEnded;
+                pipeline.Monitor.OutputMeter.StreamVolume +=
+                    MonitorOutputMeter_StreamVolume;
+            }
 
             return pipeline;
         }
@@ -427,6 +590,88 @@ public sealed class AudioMixEngine : IDisposable
             DisposeWithoutThrow(output);
             DisposeWithoutThrow(microphoneDevice);
             DisposeWithoutThrow(renderDevice);
+            throw;
+        }
+    }
+
+    private static MonitorPipelineResources CreateMonitorPipeline(
+        MMDeviceEnumerator enumerator,
+        string monitorEndpointId,
+        string virtualRenderEndpointId)
+    {
+        MMDevice? monitorDevice = null;
+        WasapiOut? monitorOutput = null;
+
+        try
+        {
+            if (string.Equals(
+                    monitorEndpointId,
+                    virtualRenderEndpointId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The monitor output cannot be the same endpoint as the "
+                    + "VB-CABLE virtual output.");
+            }
+
+            monitorDevice = enumerator.GetDevice(monitorEndpointId);
+            ValidateEndpoint(
+                monitorDevice,
+                DataFlow.Render,
+                "monitor output");
+
+            if (AudioDeviceService.IsLikelyVbCableDeviceName(
+                    monitorDevice.FriendlyName))
+            {
+                throw new InvalidOperationException(
+                    $"\"{monitorDevice.FriendlyName}\" appears to be a "
+                    + "virtual cable. Monitoring is restricted to physical "
+                    + "headphones or speakers and cannot be overridden.");
+            }
+
+            var monitorMixFormat = monitorDevice.AudioClient.MixFormat;
+            if (monitorMixFormat.Channels is < 1 or > 2)
+            {
+                throw new NotSupportedException(
+                    $"The selected monitor output exposes "
+                    + $"{monitorMixFormat.Channels} channels. Monitoring "
+                    + "supports mono and stereo outputs only.");
+            }
+
+            var monitorTargetFormat =
+                WaveFormat.CreateIeeeFloatWaveFormat(
+                    monitorMixFormat.SampleRate,
+                    monitorMixFormat.Channels);
+            var monitorMixer = new MixingSampleProvider(monitorTargetFormat)
+            {
+                ReadFully = true
+            };
+            var monitorMeter = new MeteringSampleProvider(
+                monitorMixer,
+                GetSamplesPerNotification(monitorTargetFormat));
+
+            monitorOutput = new WasapiOut(
+                monitorDevice,
+                AudioClientShareMode.Shared,
+                useEventSync: true,
+                RenderLatencyMilliseconds);
+            monitorOutput.Init(monitorMeter.ToWaveProvider());
+
+            var pipeline = new MonitorPipelineResources(
+                monitorDevice,
+                monitorOutput,
+                monitorMixer,
+                monitorMeter,
+                monitorMixFormat,
+                monitorTargetFormat);
+            monitorDevice = null;
+            monitorOutput = null;
+            return pipeline;
+        }
+        catch
+        {
+            DisposeWithoutThrow(monitorOutput);
+            DisposeWithoutThrow(monitorDevice);
             throw;
         }
     }
@@ -565,6 +810,33 @@ public sealed class AudioMixEngine : IDisposable
         HandleRuntimeFault($"Audio output stopped: {details}.");
     }
 
+    private void MonitorOutput_PlaybackStopped(
+        object? sender,
+        StoppedEventArgs eventArgs)
+    {
+        var pipeline = resources;
+        if (pipeline?.Monitor is not { } monitor
+            || !ReferenceEquals(sender, monitor.Output))
+        {
+            return;
+        }
+
+        var state = State;
+        if (state is AudioEngineState.Stopping
+            or AudioEngineState.Stopped
+            or AudioEngineState.Faulted)
+        {
+            return;
+        }
+
+        var details = eventArgs.Exception?.Message
+            ?? "the physical monitor output stopped unexpectedly";
+        QueueMonitorFault(
+            pipeline,
+            $"Sound monitoring stopped and was disabled for this engine "
+            + $"session: {details}. The virtual microphone remains active.");
+    }
+
     private void MicrophoneMeter_StreamVolume(
         object? sender,
         StreamVolumeEventArgs eventArgs)
@@ -603,16 +875,62 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
+    private void MonitorOutputMeter_StreamVolume(
+        object? sender,
+        StreamVolumeEventArgs eventArgs)
+    {
+        try
+        {
+            var pipeline = resources;
+            if (pipeline?.Monitor is not { } monitor
+                || !ReferenceEquals(sender, monitor.OutputMeter))
+            {
+                return;
+            }
+
+            var peak = GetPeak(eventArgs.MaxSampleValues);
+            Volatile.Write(ref monitorOutputPeak, peak);
+            var currentDiagnostics = diagnostics;
+            if (currentDiagnostics is not null)
+            {
+                diagnostics = currentDiagnostics with
+                {
+                    MonitorPeak = peak
+                };
+            }
+
+            RaisePeakLevelsChanged();
+        }
+        catch (Exception exception)
+        {
+            var pipeline = resources;
+            if (pipeline is null)
+            {
+                return;
+            }
+
+            QueueMonitorFault(
+                pipeline,
+                "Sound monitoring metering failed and monitoring was "
+                + $"disabled: {exception.Message}. The virtual microphone "
+                + "remains active.");
+        }
+    }
+
     private void Mixer_MixerInputEnded(
         object? sender,
         SampleProviderEventArgs eventArgs)
     {
-        if (eventArgs.SampleProvider is not SoundPlaybackSession session)
+        if (eventArgs.SampleProvider is not SoundPlaybackBranch branch
+            || branch.Role != SoundPlaybackBranchRole.VirtualOutput)
         {
             return;
         }
 
-        if (!session.TryQueueCompletion())
+        var session = Volatile.Read(ref currentSound);
+        if (session is null
+            || !ReferenceEquals(session.VirtualBranch, branch)
+            || !session.TryQueueAuthoritativeCompletion())
         {
             return;
         }
@@ -620,7 +938,32 @@ public sealed class AudioMixEngine : IDisposable
         ThreadPool.QueueUserWorkItem(
             _ => OnSoundPlaybackCompleted(
                 session,
-                session.PlaybackError));
+                branch.PlaybackError));
+    }
+
+    private void MonitorMixer_MixerInputEnded(
+        object? sender,
+        SampleProviderEventArgs eventArgs)
+    {
+        if (eventArgs.SampleProvider is not SoundPlaybackBranch branch
+            || branch.Role != SoundPlaybackBranchRole.MonitorOutput)
+        {
+            return;
+        }
+
+        var session = Volatile.Read(ref currentSound);
+        if (session is null
+            || !ReferenceEquals(session.MonitorBranch, branch)
+            || !session.TryQueueMonitorCompletion())
+        {
+            return;
+        }
+
+        ThreadPool.QueueUserWorkItem(
+            _ => OnMonitorBranchCompleted(
+                session,
+                branch,
+                branch.PlaybackError));
     }
 
     private static float GetPeak(IReadOnlyList<float> values)
@@ -643,13 +986,20 @@ public sealed class AudioMixEngine : IDisposable
         {
             if (!ReferenceEquals(currentSound, session))
             {
-                session.Dispose();
                 return;
             }
 
-            resources?.Mixer.RemoveMixerInput(session);
+            resources?.Mixer.RemoveMixerInput(session.VirtualBranch);
+            var monitorBranch = session.DetachMonitorBranch();
+            if (monitorBranch is not null)
+            {
+                resources?.Monitor?.Mixer.RemoveMixerInput(monitorBranch);
+                monitorBranch.Dispose();
+            }
+
             currentSound = null;
             session.Dispose();
+            ClearPlaybackDiagnostics();
             RaiseSoundPlaybackStateChanged(
                 SoundPlaybackChangeReason.Completed,
                 session);
@@ -662,6 +1012,49 @@ public sealed class AudioMixEngine : IDisposable
                 + $"decoded: {exception.Message}",
                 isRecoverable: true);
         }
+    }
+
+    private void OnMonitorBranchCompleted(
+        SoundPlaybackSession session,
+        SoundPlaybackBranch branch,
+        Exception? exception)
+    {
+        lock (lifecycleLock)
+        {
+            if (!ReferenceEquals(currentSound, session)
+                || !ReferenceEquals(session.MonitorBranch, branch))
+            {
+                return;
+            }
+
+            resources?.Monitor?.Mixer.RemoveMixerInput(branch);
+            session.DetachMonitorBranch();
+            branch.Dispose();
+            Volatile.Write(ref monitorOutputPeak, 0f);
+
+            if (exception is null)
+            {
+                var currentDiagnostics = diagnostics;
+                if (currentDiagnostics is not null)
+                {
+                    diagnostics = currentDiagnostics with
+                    {
+                        MonitorPeak = 0f
+                    };
+                }
+            }
+            else if (resources is not null)
+            {
+                DisableMonitorPipelineCore(
+                    resources,
+                    "Sound monitoring stopped because its file branch could "
+                    + $"not be decoded: {exception.Message}. Monitoring was "
+                    + "disabled for this engine session; the virtual "
+                    + "microphone remains active.");
+            }
+        }
+
+        RaisePeakLevelsChanged();
     }
 
     private void StopCore(bool leaveFaulted)
@@ -705,8 +1098,17 @@ public sealed class AudioMixEngine : IDisposable
             return;
         }
 
-        resources?.Mixer.RemoveMixerInput(session);
+        resources?.Mixer.RemoveMixerInput(session.VirtualBranch);
+        var monitorBranch = session.DetachMonitorBranch();
+        if (monitorBranch is not null)
+        {
+            resources?.Monitor?.Mixer.RemoveMixerInput(monitorBranch);
+            monitorBranch.Dispose();
+        }
+
         session.Dispose();
+        Volatile.Write(ref monitorOutputPeak, 0f);
+        ClearPlaybackDiagnostics();
 
         if (raiseEvent)
         {
@@ -723,6 +1125,118 @@ public sealed class AudioMixEngine : IDisposable
             resources.MicrophoneVolume.Volume =
                 microphoneMuted ? 0f : microphoneVolume;
         }
+    }
+
+    private void QueueMonitorFault(
+        AudioPipelineResources sourcePipeline,
+        string message)
+    {
+        if (Interlocked.Exchange(ref monitorFaultCleanupQueued, 1) != 0)
+        {
+            return;
+        }
+
+        ThreadPool.QueueUserWorkItem(
+            _ =>
+            {
+                try
+                {
+                    lock (lifecycleLock)
+                    {
+                        var pipeline = resources;
+                        if (!ReferenceEquals(pipeline, sourcePipeline)
+                            || State != AudioEngineState.Running)
+                        {
+                            return;
+                        }
+
+                        DisableMonitorPipelineCore(pipeline, message);
+                    }
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref monitorFaultCleanupQueued, 0);
+                }
+            });
+    }
+
+    private void DisableMonitorPipelineCore(
+        AudioPipelineResources pipeline,
+        string message,
+        bool reportError = true)
+    {
+        var monitor = pipeline.Monitor;
+        if (monitor is null)
+        {
+            return;
+        }
+
+        pipeline.Monitor = null;
+        monitor.Output.PlaybackStopped -= MonitorOutput_PlaybackStopped;
+        monitor.Mixer.MixerInputEnded -= MonitorMixer_MixerInputEnded;
+        monitor.OutputMeter.StreamVolume -=
+            MonitorOutputMeter_StreamVolume;
+
+        var monitorBranch = currentSound?.DetachMonitorBranch();
+        if (monitorBranch is not null)
+        {
+            monitor.Mixer.RemoveMixerInput(monitorBranch);
+            monitorBranch.Dispose();
+        }
+
+        monitor.Dispose();
+        Volatile.Write(ref monitorOutputPeak, 0f);
+        pipeline.Diagnostics = pipeline.Diagnostics with
+        {
+            MonitorInitializationStatus = "Disabled after failure",
+            MonitorPeak = 0f,
+            MonitorResamplingActive = null,
+            MonitorChannelConversionActive = null,
+            LastMonitorWarningOrError = message
+        };
+        diagnostics = pipeline.Diagnostics;
+        RaisePeakLevelsChanged();
+        if (reportError)
+        {
+            ReportError(message, isRecoverable: true);
+        }
+    }
+
+    private void UpdatePlaybackDiagnostics(SoundPlaybackSession session)
+    {
+        if (resources is null)
+        {
+            return;
+        }
+
+        var monitorBranch = session.MonitorBranch;
+        resources.Diagnostics = resources.Diagnostics with
+        {
+            CurrentSoundId = session.SoundId,
+            CurrentPlaybackSessionId = session.SessionId,
+            MonitorResamplingActive = monitorBranch?.ResamplingActive,
+            MonitorChannelConversionActive =
+                monitorBranch?.ChannelConversionActive
+        };
+        diagnostics = resources.Diagnostics;
+    }
+
+    private void ClearPlaybackDiagnostics()
+    {
+        if (resources is null)
+        {
+            return;
+        }
+
+        resources.Diagnostics = resources.Diagnostics with
+        {
+            CurrentSoundId = null,
+            CurrentPlaybackSessionId = null,
+            MonitorResamplingActive = null,
+            MonitorChannelConversionActive = null,
+            MonitorPeak = 0f
+        };
+        diagnostics = resources.Diagnostics;
     }
 
     private void HandleRuntimeFault(string message)
@@ -756,6 +1270,16 @@ public sealed class AudioMixEngine : IDisposable
     {
         Volatile.Write(ref microphonePeak, 0f);
         Volatile.Write(ref mixedOutputPeak, 0f);
+        Volatile.Write(ref monitorOutputPeak, 0f);
+        var currentDiagnostics = diagnostics;
+        if (currentDiagnostics is not null)
+        {
+            diagnostics = currentDiagnostics with
+            {
+                MonitorPeak = 0f
+            };
+        }
+
         RaisePeakLevelsChanged();
     }
 
@@ -765,7 +1289,8 @@ public sealed class AudioMixEngine : IDisposable
             this,
             new AudioPeakLevelsEventArgs(
                 Volatile.Read(ref microphonePeak),
-                Volatile.Read(ref mixedOutputPeak)));
+                Volatile.Read(ref mixedOutputPeak),
+                Volatile.Read(ref monitorOutputPeak)));
     }
 
     private void SetState(AudioEngineState state)
@@ -826,6 +1351,16 @@ public sealed class AudioMixEngine : IDisposable
         pipeline.MicrophoneMeter.StreamVolume -=
             MicrophoneMeter_StreamVolume;
         pipeline.OutputMeter.StreamVolume -= OutputMeter_StreamVolume;
+        if (pipeline.Monitor is not null)
+        {
+            pipeline.Monitor.Output.PlaybackStopped -=
+                MonitorOutput_PlaybackStopped;
+            pipeline.Monitor.Mixer.MixerInputEnded -=
+                MonitorMixer_MixerInputEnded;
+            pipeline.Monitor.OutputMeter.StreamVolume -=
+                MonitorOutputMeter_StreamVolume;
+        }
+
         pipeline.Dispose();
     }
 
@@ -908,7 +1443,9 @@ public sealed class AudioMixEngine : IDisposable
 
         public WaveFormat TargetFormat { get; }
 
-        public AudioMixEngineDiagnostics Diagnostics { get; }
+        public AudioMixEngineDiagnostics Diagnostics { get; set; }
+
+        public MonitorPipelineResources? Monitor { get; set; }
 
         public void Dispose()
         {
@@ -939,10 +1476,68 @@ public sealed class AudioMixEngine : IDisposable
 
             RunCleanupWithoutThrow(MicrophoneBuffer.ClearBuffer);
             RunCleanupWithoutThrow(Mixer.RemoveAllMixerInputs);
+            DisposeWithoutThrow(Monitor);
+            Monitor = null;
             DisposeWithoutThrow(Capture);
             DisposeWithoutThrow(Output);
             DisposeWithoutThrow(MicrophoneDevice);
             DisposeWithoutThrow(RenderDevice);
+        }
+    }
+
+    private sealed class MonitorPipelineResources : IDisposable
+    {
+        private bool disposed;
+
+        public MonitorPipelineResources(
+            MMDevice device,
+            WasapiOut output,
+            MixingSampleProvider mixer,
+            MeteringSampleProvider outputMeter,
+            WaveFormat mixFormat,
+            WaveFormat targetFormat)
+        {
+            Device = device;
+            Output = output;
+            Mixer = mixer;
+            OutputMeter = outputMeter;
+            MixFormat = mixFormat;
+            TargetFormat = targetFormat;
+        }
+
+        public MMDevice Device { get; }
+
+        public WasapiOut Output { get; }
+
+        public MixingSampleProvider Mixer { get; }
+
+        public MeteringSampleProvider OutputMeter { get; }
+
+        public WaveFormat MixFormat { get; }
+
+        public WaveFormat TargetFormat { get; }
+
+        public void Dispose()
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+
+            try
+            {
+                Output.Stop();
+            }
+            catch
+            {
+                // Device removal can make Stop fail. Dispose still runs.
+            }
+
+            RunCleanupWithoutThrow(Mixer.RemoveAllMixerInputs);
+            DisposeWithoutThrow(Output);
+            DisposeWithoutThrow(Device);
         }
     }
 }

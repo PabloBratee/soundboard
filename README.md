@@ -10,17 +10,21 @@ audio endpoint for Discord or a game.
 - retains selections by Windows Core Audio endpoint ID;
 - captures the physical microphone through WASAPI shared mode;
 - mixes the live microphone with one WAV or MP3 sound at a time;
+- optionally sends that sound alone to physical headphones or speakers through
+  a separate WASAPI shared-mode output;
 - provides microphone volume, mute, peak metering, master sound volume, and a
   final-output meter;
+- provides independent monitor volume and monitor-output peak metering;
 - imports multiple audio files into a persistent local library;
 - supports drag-and-drop import, tile playback, search, rename, and remove;
 - detects duplicate content with a SHA-256 hash; and
 - exposes engine, endpoint, mixer-format, overflow, playback, error, and
   library-path diagnostics.
 
-The engine refuses physical speakers and headsets as output targets. There is
-no override because feeding a live microphone to physical speakers can cause
-loud feedback.
+The virtual-microphone output refuses physical speakers and headsets. The
+optional monitor output does the inverse: it accepts only active physical
+render endpoints and refuses likely VB-CABLE endpoints, with no override.
+These restrictions keep microphone audio away from physical playback devices.
 
 ## Technology
 
@@ -89,7 +93,10 @@ Physical microphone ─┐
                      ├─ Soundboard mixer → CABLE Input
 One sound effect ────┘
 
+One sound effect ────── Sound-only monitor mixer → Physical headphones
+
 CABLE Output → Discord or game microphone
+Discord or game output → Physical headphones
 ```
 
 Friendly names can vary. Soundboard stores endpoint IDs and will not start
@@ -109,20 +116,71 @@ dotnet run --project .\src\Soundboard.App\Soundboard.App.csproj --configuration 
 ## Start the audio engine
 
 1. Select the physical microphone.
-2. Select the standard VB-CABLE render endpoint, normally
+2. Select the standard VB-CABLE virtual render endpoint, normally
    `CABLE Input (VB-Audio Virtual Cable)`.
-3. Select **Start audio engine**.
-4. Speak and verify the microphone and final-output meters move.
-5. Import sounds and select a sound tile.
-6. Select **Stop audio engine** before changing or refreshing devices.
+3. Optionally enable **Monitor sounds through headphones** and select a
+   physical monitor output, such as
+   `Speakers (2- Razer BlackShark V2 Pro)`.
+4. Select **Start audio engine**.
+5. Speak and verify the microphone and final-output meters move. The monitor
+   meter must remain idle because microphone audio is never monitored.
+6. Import sounds and select a sound tile.
+7. Select **Stop audio engine** before changing devices, changing the monitor
+   enable state, or refreshing devices.
 
 Soundboard restores available saved endpoints. If the saved microphone is
 unavailable, it uses the current default microphone. If the saved output is
 unavailable, it prefers the standard `CABLE Input` render endpoint. It also
 restores microphone volume, microphone mute, sound volume, and practical
-window bounds. The audio engine never starts automatically.
+window bounds. Monitoring enable state, the monitor endpoint ID, and monitor
+volume are also restored. If the saved monitor endpoint is unavailable or is
+now identified as virtual, Soundboard falls back to the current default active
+non-virtual render endpoint, then another active physical render endpoint. The
+audio engine never starts automatically.
 
 Soundboard does not change Windows default recording or playback devices.
+
+## Sound-only headphone monitoring
+
+Monitoring is disabled by default on a new installation. When enabled,
+Soundboard opens the selected physical render endpoint in WASAPI shared mode
+when the engine starts. It sends only the current soundboard clip to that
+device:
+
+```text
+To Discord:
+Microphone + Soundboard → CABLE Input
+
+To your headphones:
+Soundboard only → Physical headset or speakers
+```
+
+Microphone monitoring is intentionally unsupported. The monitor mixer has no
+microphone input, loopback capture, system audio, Discord audio, game audio, or
+VB-CABLE capture input. Soundboard never enables Windows **Listen to this
+device**.
+
+The selected virtual and monitor endpoints can have different sample rates and
+channel counts. Each sound gets a separate reader and is normalized
+independently to a mono or stereo 32-bit floating-point mixer target derived
+from that endpoint's own mix format. A monitor endpoint exposing more than two
+channels is rejected with a clear warning rather than reinterpreted.
+
+Monitor volume ranges from 0% to 200% and affects only local monitoring. Sound
+volume affects the copy sent to Discord or a game. Setting monitor volume to
+0% therefore silences local sound playback without silencing the virtual
+microphone path.
+
+The monitor enable setting, monitor selector, and device refresh are locked
+while the engine runs; monitor volume remains adjustable. Settings changes
+never restart the engine automatically. Soundboard never changes the Windows
+default render device.
+
+If the physical monitor is missing, disconnected, unsupported, or fails to
+initialize or play, monitoring is disabled for that engine session and a
+warning is shown. The primary microphone-plus-sound path remains running when
+technically possible. Stop the engine, select another physical output, and
+start it again. Soundboard does not silently switch outputs while running.
 
 ## Import and manage sounds
 
@@ -193,7 +251,15 @@ a virtual endpoint nor installs a driver.
 
 Stop other applications that may hold the endpoint exclusively, then restart
 the Soundboard engine. Device removal or stream failures are shown in the
-status area. Device refresh is available only while the engine is stopped.
+status area. A monitor-only failure does not intentionally stop the virtual
+microphone. Device refresh is available only while the engine is stopped.
+
+### Monitor output is rejected
+
+The monitor selector contains active non-virtual render endpoints. A saved
+endpoint that appears to be VB-CABLE is rejected and replaced with a safe
+physical fallback. The monitor output cannot match the virtual output and
+there is no override for virtual monitor endpoints.
 
 ### Unsupported format
 
@@ -210,14 +276,14 @@ service the selected endpoints reliably at that time.
 
 ## Current limitations
 
-- one microphone and one VB-CABLE render endpoint;
+- one microphone, one VB-CABLE render endpoint, and one optional physical
+  sound-only monitor endpoint;
 - one WAV or MP3 sound effect at a time;
 - mono/stereo sources and mono/stereo output only;
 - no categories, favorites, custom tile images, or custom tile colors;
 - no hotkeys, profiles, trimming, waveform editor, fades, or normalization;
 - no gate, compression, limiter, or other audio processing;
-- no microphone, sound, or system-audio monitoring through physical
-  headphones;
+- no microphone or system-audio monitoring through physical headphones;
 - no system-audio capture or Discord-output capture;
 - no Discord API integration or automatic Discord configuration;
 - no cloud sync, SQLite database, tray integration, startup task, installer,
@@ -225,4 +291,6 @@ service the selected endpoints reliably at that time.
 
 Soundboard does not enable “Listen to this device,” request administrator
 rights, install or modify drivers, change Windows defaults, or change Discord
-settings automatically.
+settings automatically. Sound-only monitoring has not been claimed as audibly
+verified by automated build validation; perform the manual headset and Discord
+checks on the target computer before relying on it.

@@ -17,11 +17,14 @@ public sealed class AudioEngineErrorEventArgs(
 
 public sealed class AudioPeakLevelsEventArgs(
     float microphonePeak,
-    float mixedOutputPeak) : EventArgs
+    float mixedOutputPeak,
+    float monitorOutputPeak) : EventArgs
 {
     public float MicrophonePeak { get; } = microphonePeak;
 
     public float MixedOutputPeak { get; } = mixedOutputPeak;
+
+    public float MonitorOutputPeak { get; } = monitorOutputPeak;
 }
 
 public enum SoundPlaybackChangeReason

@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private AudioDeviceSnapshot? currentSnapshot;
     private AudioFormatInfo? selectedMicrophoneFormat;
     private AudioFormatInfo? selectedRenderFormat;
+    private AudioFormatInfo? selectedMonitorFormat;
     private ApplicationSettings appSettings = ApplicationSettings.Default;
     private CancellationTokenSource? settingsSaveDelayCancellation;
     private Guid? currentSoundId;
@@ -55,6 +56,8 @@ public partial class MainWindow : Window
             DeviceComboBox_SelectionChanged;
         VirtualOutputComboBox.SelectionChanged +=
             DeviceComboBox_SelectionChanged;
+        MonitorOutputComboBox.SelectionChanged +=
+            DeviceComboBox_SelectionChanged;
         MicrophoneVolumeSlider.ValueChanged +=
             MicrophoneVolumeSlider_ValueChanged;
         MuteMicrophoneCheckBox.Checked +=
@@ -63,6 +66,12 @@ public partial class MainWindow : Window
             MuteMicrophoneCheckBox_Changed;
         SoundVolumeSlider.ValueChanged +=
             SoundVolumeSlider_ValueChanged;
+        MonitorSoundsCheckBox.Checked +=
+            MonitorSoundsCheckBox_Changed;
+        MonitorSoundsCheckBox.Unchecked +=
+            MonitorSoundsCheckBox_Changed;
+        MonitorVolumeSlider.ValueChanged +=
+            MonitorVolumeSlider_ValueChanged;
 
         audioEngine.StateChanged += AudioEngine_StateChanged;
         audioEngine.ErrorOccurred += AudioEngine_ErrorOccurred;
@@ -85,7 +94,8 @@ public partial class MainWindow : Window
             await LoadSettingsAndLibraryAsync();
             await RefreshDevicesAsync(
                 appSettings.MicrophoneEndpointId,
-                appSettings.VirtualOutputEndpointId);
+                appSettings.VirtualOutputEndpointId,
+                appSettings.MonitorOutputEndpointId);
         }
         catch (Exception exception)
         {
@@ -141,6 +151,10 @@ public partial class MainWindow : Window
                 appSettings.MicrophoneMuted;
             SoundVolumeSlider.Value =
                 appSettings.SoundVolume * 100d;
+            MonitorSoundsCheckBox.IsChecked =
+                appSettings.MonitoringEnabled;
+            MonitorVolumeSlider.Value =
+                appSettings.MonitorVolume * 100d;
 
             if (appSettings.WindowWidth is { } width)
             {
@@ -184,7 +198,8 @@ public partial class MainWindow : Window
 
     private async Task RefreshDevicesAsync(
         string? preferredCaptureId = null,
-        string? preferredRenderId = null)
+        string? preferredRenderId = null,
+        string? preferredMonitorId = null)
     {
         if (audioEngine.State != AudioEngineState.Stopped)
         {
@@ -197,6 +212,8 @@ public partial class MainWindow : Window
             ?? (MicrophoneComboBox.SelectedItem as AudioEndpoint)?.DeviceId;
         var selectedRenderId = preferredRenderId
             ?? (VirtualOutputComboBox.SelectedItem as AudioEndpoint)?.DeviceId;
+        var selectedMonitorId = preferredMonitorId
+            ?? (MonitorOutputComboBox.SelectedItem as AudioEndpoint)?.DeviceId;
 
         isRefreshing = true;
         isApplyingSettings = true;
@@ -213,6 +230,10 @@ public partial class MainWindow : Window
 
             MicrophoneComboBox.ItemsSource = snapshot.CaptureEndpoints;
             VirtualOutputComboBox.ItemsSource = snapshot.RenderEndpoints;
+            var physicalRenderEndpoints = snapshot.RenderEndpoints
+                .Where(endpoint => !endpoint.IsLikelyVbCable)
+                .ToArray();
+            MonitorOutputComboBox.ItemsSource = physicalRenderEndpoints;
 
             MicrophoneComboBox.SelectedItem =
                 FindById(snapshot.CaptureEndpoints, selectedCaptureId)
@@ -235,6 +256,18 @@ public partial class MainWindow : Window
                 ?? preferredVirtualCable
                 ?? snapshot.RenderEndpoints.FirstOrDefault();
 
+            var savedMonitor = FindById(
+                snapshot.RenderEndpoints,
+                selectedMonitorId);
+            var savedMonitorRejected = savedMonitor?.IsLikelyVbCable == true;
+            MonitorOutputComboBox.SelectedItem =
+                (savedMonitor is { IsLikelyVbCable: false }
+                    ? FindById(physicalRenderEndpoints, savedMonitor.DeviceId)
+                    : null)
+                ?? physicalRenderEndpoints.FirstOrDefault(
+                    endpoint => endpoint.IsDefault)
+                ?? physicalRenderEndpoints.FirstOrDefault();
+
             DeviceCountsTextBlock.Text =
                 $"{snapshot.CaptureEndpoints.Count} capture, "
                 + $"{snapshot.RenderEndpoints.Count} render";
@@ -247,8 +280,20 @@ public partial class MainWindow : Window
                 snapshot.Warnings.Count == 0
                     ? "Device discovery completed without warnings."
                     : string.Join(" | ", snapshot.Warnings);
-
             await UpdateSelectedFormatsAsync();
+            UpdateRoutingStatusForSelection();
+            if (savedMonitorRejected)
+            {
+                var warning =
+                    $"The saved monitor endpoint \"{savedMonitor!.FriendlyName}\" "
+                    + "appears to be a virtual cable and was rejected. A "
+                    + "physical render endpoint was selected instead.";
+                ErrorTextBlock.Text = warning;
+                StatusTextBlock.Text =
+                    "A saved virtual monitor endpoint was rejected. Review "
+                    + "the selected physical monitor output before starting.";
+                lastDiagnosticMessage = warning;
+            }
         }
         finally
         {
@@ -290,9 +335,12 @@ public partial class MainWindow : Window
             MicrophoneComboBox.SelectedItem as AudioEndpoint;
         var render =
             VirtualOutputComboBox.SelectedItem as AudioEndpoint;
+        var monitor =
+            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
 
         AudioFormatInfo? microphoneFormat = null;
         AudioFormatInfo? renderFormat = null;
+        AudioFormatInfo? monitorFormat = null;
 
         if (microphone is not null)
         {
@@ -310,6 +358,14 @@ public partial class MainWindow : Window
                     AudioDeviceDirection.Render));
         }
 
+        if (monitor is not null)
+        {
+            monitorFormat = await Task.Run(
+                () => audioDeviceService.GetEndpointMixFormat(
+                    monitor.DeviceId,
+                    AudioDeviceDirection.Render));
+        }
+
         if (requestNumber != Interlocked.Read(ref formatRequestNumber)
             || isClosing)
         {
@@ -318,12 +374,14 @@ public partial class MainWindow : Window
 
         selectedMicrophoneFormat = microphoneFormat;
         selectedRenderFormat = renderFormat;
+        selectedMonitorFormat = monitorFormat;
         TargetFormatTextBlock.Text = renderFormat is null
             ? "Select a render endpoint."
             : $"{renderFormat.SampleRate:N0} Hz, "
                 + $"{FormatChannelCount(renderFormat.Channels)}, "
                 + "32-bit IEEE floating point mixer target "
                 + $"(endpoint mix format: {renderFormat.SampleFormat})";
+        UpdateRoutingExplanation();
     }
 
     private async void StartEngineButton_Click(
@@ -334,6 +392,10 @@ public partial class MainWindow : Window
             MicrophoneComboBox.SelectedItem as AudioEndpoint;
         var render =
             VirtualOutputComboBox.SelectedItem as AudioEndpoint;
+        var monitor =
+            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
+        var monitoringEnabled =
+            MonitorSoundsCheckBox.IsChecked == true;
 
         if (microphone is null || render is null)
         {
@@ -351,13 +413,29 @@ public partial class MainWindow : Window
             await Task.Run(
                 () => audioEngine.Start(
                     microphone.DeviceId,
-                    render.DeviceId));
+                    render.DeviceId,
+                    new AudioMonitorConfiguration(
+                        monitoringEnabled,
+                        monitor?.DeviceId)));
 
-            StatusTextBlock.Text =
-                "Audio engine is running and writing the mix to "
-                + $"{render.FriendlyName}.";
-            lastDiagnosticMessage =
-                "The audio engine started successfully.";
+            var monitorDiagnostics = audioEngine.Diagnostics;
+            var monitorReady =
+                monitorDiagnostics?.MonitorInitializationStatus == "Ready";
+            StatusTextBlock.Text = monitorReady
+                ? "Audio engine is running. Microphone plus soundboard is "
+                    + $"going to {render.FriendlyName}; soundboard-only "
+                    + $"monitoring is going to "
+                    + $"{monitorDiagnostics!.MonitorFriendlyName}."
+                : "Audio engine is running and writing microphone plus "
+                    + $"soundboard to {render.FriendlyName}. "
+                    + (monitoringEnabled
+                        ? "Sound monitoring is unavailable; see the warning."
+                        : "Sound monitoring is disabled.");
+            lastDiagnosticMessage = monitorReady
+                ? "The virtual and sound-only monitor outputs started "
+                    + "successfully."
+                : monitorDiagnostics?.LastMonitorWarningOrError
+                    ?? "The virtual audio engine started successfully.";
             RefreshDiagnosticStatus();
         }
         catch (Exception exception)
@@ -427,6 +505,28 @@ public partial class MainWindow : Window
         var percent = (int)Math.Round(eventArgs.NewValue);
         SoundVolumeTextBlock.Text = $"{percent}%";
         audioEngine.SoundVolume = percent / 100f;
+        UpdateSettingsFromUi();
+        ScheduleSettingsSave();
+    }
+
+    private void MonitorSoundsCheckBox_Changed(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        UpdateMonitorStatusForSelection();
+        UpdateSettingsFromUi();
+        ScheduleSettingsSave();
+        UpdateControlAvailability();
+        RefreshDiagnosticStatus();
+    }
+
+    private void MonitorVolumeSlider_ValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        var percent = (int)Math.Round(eventArgs.NewValue);
+        MonitorVolumeTextBlock.Text = $"{percent}%";
+        audioEngine.MonitorVolume = percent / 100f;
         UpdateSettingsFromUi();
         ScheduleSettingsSave();
     }
@@ -750,6 +850,7 @@ public partial class MainWindow : Window
                         + "error.";
                 }
 
+                UpdateMonitorStatusForSelection();
                 RefreshDiagnosticStatus();
             });
     }
@@ -769,6 +870,10 @@ public partial class MainWindow : Window
                     $"{eventArgs.MicrophonePeak:P0}";
                 OutputPeakTextBlock.Text =
                     $"{eventArgs.MixedOutputPeak:P0}";
+                MonitorPeakProgressBar.Value =
+                    Math.Clamp(eventArgs.MonitorOutputPeak, 0f, 1f);
+                MonitorPeakTextBlock.Text =
+                    $"{eventArgs.MonitorOutputPeak:P0}";
             });
     }
 
@@ -850,6 +955,8 @@ public partial class MainWindow : Window
 
         MicrophoneComboBox.IsEnabled = selectorsCanChange;
         VirtualOutputComboBox.IsEnabled = selectorsCanChange;
+        MonitorSoundsCheckBox.IsEnabled = selectorsCanChange;
+        MonitorOutputComboBox.IsEnabled = selectorsCanChange;
         RefreshDevicesButton.IsEnabled = selectorsCanChange;
         StartEngineButton.IsEnabled =
             selectorsCanChange
@@ -866,6 +973,7 @@ public partial class MainWindow : Window
         MicrophoneVolumeSlider.IsEnabled = volumeControlsEnabled;
         MuteMicrophoneCheckBox.IsEnabled = volumeControlsEnabled;
         SoundVolumeSlider.IsEnabled = volumeControlsEnabled;
+        MonitorVolumeSlider.IsEnabled = volumeControlsEnabled;
         ImportSoundsButton.IsEnabled =
             !isImporting
             && state is not (
@@ -874,6 +982,7 @@ public partial class MainWindow : Window
         StopSoundButton.IsEnabled =
             state == AudioEngineState.Running
             && audioEngine.IsSoundPlaying;
+        UpdateMonitorStatusForSelection();
     }
 
     private void UpdateLibraryPresentation()
@@ -944,6 +1053,93 @@ public partial class MainWindow : Window
         ErrorTextBlock.Text = string.Empty;
         StatusTextBlock.Text =
             $"Selected virtual render endpoint: {render.FriendlyName}";
+        UpdateMonitorStatusForSelection();
+        UpdateRoutingExplanation();
+    }
+
+    private void UpdateMonitorStatusForSelection()
+    {
+        var monitor =
+            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
+        var virtualOutput =
+            VirtualOutputComboBox.SelectedItem as AudioEndpoint;
+
+        if (audioEngine.State == AudioEngineState.Running)
+        {
+            var runningDiagnostics = audioEngine.Diagnostics;
+            if (runningDiagnostics?.MonitorInitializationStatus == "Ready")
+            {
+                MonitorStatusTextBlock.Text =
+                    $"Monitoring soundboard audio only through "
+                    + $"{runningDiagnostics.MonitorFriendlyName}.";
+                MonitorStatusTextBlock.Foreground = Brushes.DarkGreen;
+            }
+            else if (MonitorSoundsCheckBox.IsChecked == true)
+            {
+                MonitorStatusTextBlock.Text =
+                    runningDiagnostics?.LastMonitorWarningOrError
+                    ?? "Monitoring is unavailable for this engine session.";
+                MonitorStatusTextBlock.Foreground = Brushes.DarkRed;
+            }
+            else
+            {
+                MonitorStatusTextBlock.Text =
+                    "Monitoring is disabled. No physical render device was opened.";
+                MonitorStatusTextBlock.Foreground = Brushes.DimGray;
+            }
+
+            return;
+        }
+
+        if (MonitorSoundsCheckBox.IsChecked != true)
+        {
+            MonitorStatusTextBlock.Text =
+                "Monitoring is disabled. The physical output will not be opened.";
+            MonitorStatusTextBlock.Foreground = Brushes.DimGray;
+            return;
+        }
+
+        if (monitor is null)
+        {
+            MonitorStatusTextBlock.Text =
+                "Select an active physical headphone or speaker output. The "
+                + "virtual microphone can still start without monitoring.";
+            MonitorStatusTextBlock.Foreground = Brushes.DarkRed;
+            return;
+        }
+
+        if (monitor.IsLikelyVbCable
+            || string.Equals(
+                monitor.DeviceId,
+                virtualOutput?.DeviceId,
+                StringComparison.Ordinal))
+        {
+            MonitorStatusTextBlock.Text =
+                "Monitoring is blocked because the selected endpoint is the "
+                + "virtual cable. Select physical headphones or speakers.";
+            MonitorStatusTextBlock.Foreground = Brushes.DarkRed;
+            return;
+        }
+
+        MonitorStatusTextBlock.Text =
+            $"Ready to monitor soundboard audio only through "
+            + $"{monitor.FriendlyName}. The engine will not restart "
+            + "automatically.";
+        MonitorStatusTextBlock.Foreground = Brushes.DarkGreen;
+    }
+
+    private void UpdateRoutingExplanation()
+    {
+        var virtualOutput =
+            VirtualOutputComboBox.SelectedItem as AudioEndpoint;
+        var monitor =
+            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
+        VirtualRoutingTextBlock.Text =
+            "Microphone + Soundboard → "
+            + (virtualOutput?.FriendlyName ?? "select VB-CABLE output");
+        MonitorRoutingTextBlock.Text =
+            "Soundboard only → "
+            + (monitor?.FriendlyName ?? "select a physical output");
     }
 
     private void RefreshDiagnosticStatus()
@@ -956,6 +1152,12 @@ public partial class MainWindow : Window
             $"Current playing sound: "
                 + $"{FindTile(currentSoundId ?? Guid.Empty)?.DisplayName
                     ?? "None"}",
+            $"Current playback session ID: "
+                + $"{(currentSoundId is null
+                    ? "None"
+                    : currentSoundSessionId)}",
+            $"Monitoring enabled setting: "
+                + $"{YesNo(MonitorSoundsCheckBox.IsChecked == true)}",
             "Windows defaults changed by app: No",
             string.Empty
         };
@@ -964,6 +1166,8 @@ public partial class MainWindow : Window
             MicrophoneComboBox.SelectedItem as AudioEndpoint;
         var render =
             VirtualOutputComboBox.SelectedItem as AudioEndpoint;
+        var monitor =
+            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
         var relatedCapture = currentSnapshot?.CaptureEndpoints
             .FirstOrDefault(endpoint => endpoint.IsLikelyVbCable);
 
@@ -982,6 +1186,11 @@ public partial class MainWindow : Window
             "Related VB-CABLE capture",
             relatedCapture,
             format: null);
+        AddSelectedEndpoint(
+            lines,
+            "Selected physical monitor render",
+            monitor,
+            selectedMonitorFormat);
 
         var engineDiagnostics = audioEngine.Diagnostics;
         if (engineDiagnostics is not null)
@@ -1005,6 +1214,44 @@ public partial class MainWindow : Window
             lines.Add(
                 $"- Microphone buffer capacity: "
                 + $"{engineDiagnostics.MicrophoneBufferCapacity.TotalMilliseconds:N0} ms");
+            lines.Add(
+                $"- Monitoring enabled for engine session: "
+                + $"{YesNo(engineDiagnostics.MonitoringEnabled)}");
+            lines.Add(
+                $"- Monitor initialization: "
+                + $"{engineDiagnostics.MonitorInitializationStatus}");
+            lines.Add(
+                $"- Monitor endpoint name: "
+                + $"{engineDiagnostics.MonitorFriendlyName ?? "None"}");
+            lines.Add(
+                $"- Monitor endpoint ID: "
+                + $"{engineDiagnostics.MonitorEndpointId ?? "None"}");
+            lines.Add(
+                $"- Monitor endpoint mix: "
+                + $"{engineDiagnostics.MonitorMixFormat?.ToString() ?? "N/A"}");
+            lines.Add(
+                $"- Monitor mixer target: "
+                + $"{engineDiagnostics.MonitorTargetFormat?.ToString() ?? "N/A"}");
+            lines.Add(
+                $"- Monitor sound resampling: "
+                + $"{YesNoOrNotActive(
+                    engineDiagnostics.MonitorResamplingActive)}");
+            lines.Add(
+                $"- Monitor sound channel conversion: "
+                + $"{YesNoOrNotActive(
+                    engineDiagnostics.MonitorChannelConversionActive)}");
+            lines.Add(
+                $"- Monitor peak: {engineDiagnostics.MonitorPeak:P0}");
+            lines.Add(
+                $"- Last monitor warning/error: "
+                + $"{engineDiagnostics.LastMonitorWarningOrError ?? "None"}");
+            lines.Add(
+                $"- Current logical sound ID: "
+                + $"{engineDiagnostics.CurrentSoundId?.ToString() ?? "None"}");
+            lines.Add(
+                $"- Current playback session ID: "
+                + $"{engineDiagnostics.CurrentPlaybackSessionId?.ToString()
+                    ?? "None"}");
         }
 
         lines.Add(
@@ -1083,6 +1330,11 @@ public partial class MainWindow : Window
                 (MicrophoneComboBox.SelectedItem as AudioEndpoint)?.DeviceId,
             VirtualOutputEndpointId =
                 (VirtualOutputComboBox.SelectedItem as AudioEndpoint)?.DeviceId,
+            MonitoringEnabled =
+                MonitorSoundsCheckBox.IsChecked == true,
+            MonitorOutputEndpointId =
+                (MonitorOutputComboBox.SelectedItem as AudioEndpoint)?.DeviceId,
+            MonitorVolume = MonitorVolumeSlider.Value / 100d,
             MicrophoneVolume = MicrophoneVolumeSlider.Value / 100d,
             MicrophoneMuted =
                 MuteMicrophoneCheckBox.IsChecked == true,
@@ -1288,4 +1540,11 @@ public partial class MainWindow : Window
     }
 
     private static string YesNo(bool value) => value ? "Yes" : "No";
+
+    private static string YesNoOrNotActive(bool? value)
+    {
+        return value is { } active
+            ? YesNo(active)
+            : "N/A (no active monitor sound branch)";
+    }
 }

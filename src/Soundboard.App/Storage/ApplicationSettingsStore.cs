@@ -143,6 +143,7 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
                 0d,
                 2d),
             SoundVolume = Math.Clamp(settings.SoundVolume, 0d, 2d),
+            MonitorVolume = Math.Clamp(settings.MonitorVolume, 0d, 2d),
             WindowWidth = ValidateDimension(
                 settings.WindowWidth,
                 minimum: 760d),

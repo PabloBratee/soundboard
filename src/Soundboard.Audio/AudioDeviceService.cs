@@ -10,6 +10,7 @@ public sealed class AudioDeviceService
         using var enumerator = new MMDeviceEnumerator();
         var warnings = new List<string>();
         var defaultCaptureDeviceId = GetDefaultCaptureDeviceId(enumerator, warnings);
+        var defaultRenderDeviceId = GetDefaultRenderDeviceId(enumerator, warnings);
 
         var captureEndpoints = EnumerateActiveEndpoints(
             enumerator,
@@ -22,7 +23,7 @@ public sealed class AudioDeviceService
             enumerator,
             DataFlow.Render,
             AudioDeviceDirection.Render,
-            defaultDeviceId: null,
+            defaultRenderDeviceId,
             warnings);
 
         return new AudioDeviceSnapshot(
@@ -72,20 +73,47 @@ public sealed class AudioDeviceService
         MMDeviceEnumerator enumerator,
         ICollection<string> warnings)
     {
+        return GetDefaultDeviceId(
+            enumerator,
+            DataFlow.Capture,
+            "capture",
+            warnings);
+    }
+
+    private static string? GetDefaultRenderDeviceId(
+        MMDeviceEnumerator enumerator,
+        ICollection<string> warnings)
+    {
+        return GetDefaultDeviceId(
+            enumerator,
+            DataFlow.Render,
+            "render",
+            warnings);
+    }
+
+    private static string? GetDefaultDeviceId(
+        MMDeviceEnumerator enumerator,
+        DataFlow dataFlow,
+        string directionLabel,
+        ICollection<string> warnings)
+    {
         try
         {
-            if (!enumerator.HasDefaultAudioEndpoint(DataFlow.Capture, Role.Console))
+            if (!enumerator.HasDefaultAudioEndpoint(dataFlow, Role.Console))
             {
                 return null;
             }
 
-            using var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
+            using var defaultDevice = enumerator.GetDefaultAudioEndpoint(
+                dataFlow,
+                Role.Console);
             return defaultDevice.ID;
         }
         catch (Exception exception) when (IsRecoverableDeviceException(exception))
         {
             warnings.Add(
-                $"Windows did not provide the default capture endpoint: {exception.Message}");
+                $"Windows did not provide the default {directionLabel} endpoint: "
+                + exception.Message);
             return null;
         }
     }

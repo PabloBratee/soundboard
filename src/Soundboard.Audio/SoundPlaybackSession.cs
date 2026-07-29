@@ -3,24 +3,145 @@ using NAudio.Wave.SampleProviders;
 
 namespace Soundboard.Audio;
 
-internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
+internal enum SoundPlaybackBranchRole
+{
+    VirtualOutput,
+    MonitorOutput
+}
+
+internal sealed class SoundPlaybackSession : IDisposable
+{
+    private readonly object syncRoot = new();
+    private SoundPlaybackBranch? monitorBranch;
+    private bool disposed;
+    private int authoritativeCompletionQueued;
+    private int monitorCompletionQueued;
+
+    public SoundPlaybackSession(
+        Guid soundId,
+        long sessionId,
+        string filePath,
+        WaveFormat virtualTargetFormat,
+        float virtualVolume)
+    {
+        SoundId = soundId;
+        SessionId = sessionId;
+        VirtualBranch = new SoundPlaybackBranch(
+            SoundPlaybackBranchRole.VirtualOutput,
+            filePath,
+            virtualTargetFormat,
+            virtualVolume);
+    }
+
+    public Guid SoundId { get; }
+
+    public long SessionId { get; }
+
+    public SoundPlaybackBranch VirtualBranch { get; }
+
+    public SoundPlaybackBranch? MonitorBranch
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return monitorBranch;
+            }
+        }
+    }
+
+    public void AttachMonitorBranch(SoundPlaybackBranch branch)
+    {
+        ArgumentNullException.ThrowIfNull(branch);
+
+        if (branch.Role != SoundPlaybackBranchRole.MonitorOutput)
+        {
+            throw new ArgumentException(
+                "The branch must target the monitor output.",
+                nameof(branch));
+        }
+
+        lock (syncRoot)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (monitorBranch is not null)
+            {
+                throw new InvalidOperationException(
+                    "The playback session already has a monitor branch.");
+            }
+
+            monitorBranch = branch;
+        }
+    }
+
+    public SoundPlaybackBranch? DetachMonitorBranch()
+    {
+        lock (syncRoot)
+        {
+            var branch = monitorBranch;
+            monitorBranch = null;
+            return branch;
+        }
+    }
+
+    public bool TryQueueAuthoritativeCompletion()
+    {
+        return Interlocked.Exchange(
+            ref authoritativeCompletionQueued,
+            1) == 0;
+    }
+
+    public bool TryQueueMonitorCompletion()
+    {
+        return Interlocked.Exchange(ref monitorCompletionQueued, 1) == 0;
+    }
+
+    public void SetVirtualVolume(float volume)
+    {
+        VirtualBranch.Volume = volume;
+    }
+
+    public void SetMonitorVolume(float volume)
+    {
+        MonitorBranch?.SetVolume(volume);
+    }
+
+    public void Dispose()
+    {
+        SoundPlaybackBranch? branch;
+
+        lock (syncRoot)
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+            branch = monitorBranch;
+            monitorBranch = null;
+        }
+
+        VirtualBranch.Dispose();
+        branch?.Dispose();
+    }
+}
+
+internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
 {
     private readonly object syncRoot = new();
     private readonly AudioFileReader reader;
     private readonly VolumeSampleProvider volumeProvider;
     private Exception? playbackError;
     private bool disposed;
-    private int completionQueued;
 
-    public SoundPlaybackSession(
-        Guid soundId,
-        long sessionId,
+    public SoundPlaybackBranch(
+        SoundPlaybackBranchRole role,
         string filePath,
         WaveFormat targetFormat,
         float volume)
     {
-        SoundId = soundId;
-        SessionId = sessionId;
+        Role = role;
         reader = new AudioFileReader(filePath);
 
         try
@@ -28,9 +149,11 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
             var normalized = AudioFormatNormalizer.Normalize(
                 reader,
                 targetFormat,
-                out _,
-                out _);
+                out var resamplingActive,
+                out var channelConversionActive);
 
+            ResamplingActive = resamplingActive;
+            ChannelConversionActive = channelConversionActive;
             volumeProvider = new VolumeSampleProvider(normalized)
             {
                 Volume = volume
@@ -45,9 +168,11 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
 
     public WaveFormat WaveFormat => volumeProvider.WaveFormat;
 
-    public Guid SoundId { get; }
+    public SoundPlaybackBranchRole Role { get; }
 
-    public long SessionId { get; }
+    public bool ResamplingActive { get; }
+
+    public bool ChannelConversionActive { get; }
 
     public Exception? PlaybackError
     {
@@ -74,15 +199,25 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
         {
             lock (syncRoot)
             {
+                ObjectDisposedException.ThrowIf(disposed, this);
                 volumeProvider.Volume = value;
+            }
+        }
+    }
+
+    public void SetVolume(float volume)
+    {
+        lock (syncRoot)
+        {
+            if (!disposed)
+            {
+                volumeProvider.Volume = volume;
             }
         }
     }
 
     public int Read(float[] buffer, int offset, int count)
     {
-        var samplesRead = 0;
-
         lock (syncRoot)
         {
             if (disposed)
@@ -92,20 +227,14 @@ internal sealed class SoundPlaybackSession : ISampleProvider, IDisposable
 
             try
             {
-                samplesRead = volumeProvider.Read(buffer, offset, count);
+                return volumeProvider.Read(buffer, offset, count);
             }
             catch (Exception exception)
             {
                 playbackError = exception;
+                return 0;
             }
         }
-
-        return samplesRead;
-    }
-
-    public bool TryQueueCompletion()
-    {
-        return Interlocked.Exchange(ref completionQueued, 1) == 0;
     }
 
     public void Dispose()

@@ -12,4 +12,30 @@ public sealed record AudioMixEngineDiagnostics(
     AudioFormatInfo MixerTargetFormat,
     bool MicrophoneResamplingActive,
     bool MicrophoneChannelConversionActive,
-    TimeSpan MicrophoneBufferCapacity);
+    TimeSpan MicrophoneBufferCapacity)
+{
+    public bool MonitoringEnabled { get; init; }
+
+    public string? MonitorFriendlyName { get; init; }
+
+    public string? MonitorEndpointId { get; init; }
+
+    public AudioFormatInfo? MonitorMixFormat { get; init; }
+
+    public AudioFormatInfo? MonitorTargetFormat { get; init; }
+
+    public bool? MonitorResamplingActive { get; init; }
+
+    public bool? MonitorChannelConversionActive { get; init; }
+
+    public float MonitorPeak { get; init; }
+
+    public string MonitorInitializationStatus { get; init; } =
+        "Disabled by setting";
+
+    public string? LastMonitorWarningOrError { get; init; }
+
+    public Guid? CurrentSoundId { get; init; }
+
+    public long? CurrentPlaybackSessionId { get; init; }
+}

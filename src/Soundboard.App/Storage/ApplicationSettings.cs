@@ -1,24 +1,30 @@
 namespace Soundboard.App.Storage;
 
-public sealed record ApplicationSettings(
-    string? MicrophoneEndpointId,
-    string? VirtualOutputEndpointId,
-    double MicrophoneVolume,
-    bool MicrophoneMuted,
-    double SoundVolume,
-    double? WindowLeft,
-    double? WindowTop,
-    double? WindowWidth,
-    double? WindowHeight)
+public sealed record ApplicationSettings
 {
-    public static ApplicationSettings Default { get; } = new(
-        MicrophoneEndpointId: null,
-        VirtualOutputEndpointId: null,
-        MicrophoneVolume: 1d,
-        MicrophoneMuted: false,
-        SoundVolume: 1d,
-        WindowLeft: null,
-        WindowTop: null,
-        WindowWidth: null,
-        WindowHeight: null);
+    public string? MicrophoneEndpointId { get; init; }
+
+    public string? VirtualOutputEndpointId { get; init; }
+
+    public double MicrophoneVolume { get; init; } = 1d;
+
+    public bool MicrophoneMuted { get; init; }
+
+    public double SoundVolume { get; init; } = 1d;
+
+    public bool MonitoringEnabled { get; init; }
+
+    public string? MonitorOutputEndpointId { get; init; }
+
+    public double MonitorVolume { get; init; } = 1d;
+
+    public double? WindowLeft { get; init; }
+
+    public double? WindowTop { get; init; }
+
+    public double? WindowWidth { get; init; }
+
+    public double? WindowHeight { get; init; }
+
+    public static ApplicationSettings Default { get; } = new();
 }
