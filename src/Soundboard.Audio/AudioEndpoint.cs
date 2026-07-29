@@ -1,0 +1,9 @@
+namespace Soundboard.Audio;
+
+public sealed record AudioEndpoint(
+    string DeviceId,
+    string FriendlyName,
+    AudioDeviceDirection Direction,
+    AudioEndpointState State,
+    bool IsDefault,
+    bool IsLikelyVbCable);

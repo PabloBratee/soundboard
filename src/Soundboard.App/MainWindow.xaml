@@ -1,0 +1,99 @@
+<Window x:Class="Soundboard.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Soundboard"
+        Width="720"
+        Height="560"
+        MinWidth="600"
+        MinHeight="480"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   FontSize="28"
+                   FontWeight="SemiBold"
+                   Text="Soundboard" />
+
+        <TextBlock Grid.Row="1"
+                   Margin="0,8,0,22"
+                   Foreground="#555555"
+                   Text="Audio-device setup test. No audio stream is started by this screen."
+                   TextWrapping="Wrap" />
+
+        <StackPanel Grid.Row="2" Margin="0,0,0,16">
+            <Label Padding="0,0,0,6"
+                   FontWeight="SemiBold"
+                   Content="Microphone (active capture endpoint)" />
+            <ComboBox x:Name="MicrophoneComboBox"
+                      MinHeight="32"
+                      DisplayMemberPath="FriendlyName"
+                      IsTextSearchEnabled="True" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Margin="0,0,0,16">
+            <Label Padding="0,0,0,6"
+                   FontWeight="SemiBold"
+                   Content="Virtual output (active render endpoint)" />
+            <ComboBox x:Name="VirtualOutputComboBox"
+                      MinHeight="32"
+                      DisplayMemberPath="FriendlyName"
+                      IsTextSearchEnabled="True" />
+        </StackPanel>
+
+        <Grid Grid.Row="4" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Button x:Name="RefreshDevicesButton"
+                    MinWidth="125"
+                    Padding="12,7"
+                    Click="RefreshDevicesButton_Click"
+                    Content="Refresh devices" />
+
+            <TextBlock x:Name="DeviceCountsTextBlock"
+                       Grid.Column="1"
+                       Margin="16,0,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="#444444"
+                       Text="Waiting for device discovery…" />
+        </Grid>
+
+        <Border Grid.Row="5"
+                Margin="0,0,0,14"
+                Padding="10"
+                Background="#FFF4D6"
+                BorderBrush="#E6C66A"
+                BorderThickness="1"
+                CornerRadius="4">
+            <TextBlock x:Name="VirtualCableStatusTextBlock"
+                       FontWeight="SemiBold"
+                       Text="Checking for a likely VB-CABLE render endpoint…"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <GroupBox Grid.Row="6" Header="Diagnostic status">
+            <TextBox x:Name="DiagnosticStatusTextBox"
+                     Margin="8"
+                     Padding="8"
+                     AcceptsReturn="True"
+                     Background="#FAFAFA"
+                     BorderThickness="0"
+                     FontFamily="Consolas"
+                     IsReadOnly="True"
+                     Text="Device discovery has not run yet."
+                     TextWrapping="Wrap"
+                     VerticalScrollBarVisibility="Auto" />
+        </GroupBox>
+    </Grid>
+</Window>
