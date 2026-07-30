@@ -2,7 +2,19 @@ namespace Soundboard.App.Storage;
 
 public sealed record SoundLibraryLoadResult(
     IReadOnlyList<SoundLibraryEntry> Sounds,
+    IReadOnlyList<SoundCategory> Categories,
     IReadOnlyList<string> Warnings);
+
+public sealed record SoundMetadataUpdate(
+    string DisplayName,
+    Guid? CategoryId,
+    bool IsFavorite,
+    SoundTileAccent TileAccent);
+
+public sealed record CategoryDeleteResult(
+    IReadOnlyList<SoundLibraryEntry> Sounds,
+    IReadOnlyList<SoundCategory> Categories,
+    int UncategorizedSoundCount);
 
 public sealed record SoundImportResult(
     IReadOnlyList<SoundLibraryEntry> Imported,

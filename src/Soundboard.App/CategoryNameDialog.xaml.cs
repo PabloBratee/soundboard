@@ -2,12 +2,18 @@ using System.Windows;
 
 namespace Soundboard.App;
 
-public partial class RenameSoundDialog : Window
+public partial class CategoryNameDialog : Window
 {
-    public RenameSoundDialog(string currentName)
+    public CategoryNameDialog(
+        string title,
+        string actionName,
+        string initialName = "")
     {
         InitializeComponent();
-        NameTextBox.Text = currentName;
+        Title = title;
+        PromptTextBlock.Text = actionName;
+        SaveButton.Content = actionName;
+        NameTextBox.Text = initialName;
         Loaded += (_, _) =>
         {
             NameTextBox.Focus();
@@ -15,18 +21,18 @@ public partial class RenameSoundDialog : Window
         };
     }
 
-    public string SoundName => NameTextBox.Text.Trim();
+    public string CategoryName => NameTextBox.Text.Trim();
 
-    private void RenameButton_Click(
+    private void SaveButton_Click(
         object sender,
         RoutedEventArgs eventArgs)
     {
-        if (SoundName.Length == 0)
+        if (CategoryName.Length == 0)
         {
             MessageBox.Show(
                 this,
-                "Enter a non-empty display name.",
-                "Rename sound",
+                "Enter a non-empty category name.",
+                Title,
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;

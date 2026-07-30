@@ -12,4 +12,7 @@ public sealed record SoundLibraryEntry(
     DateTimeOffset ImportedAtUtc,
     int SortOrder,
     string ContentHash,
-    HotkeyGesture? Hotkey = null);
+    HotkeyGesture? Hotkey = null,
+    Guid? CategoryId = null,
+    bool IsFavorite = false,
+    SoundTileAccent TileAccent = SoundTileAccent.Default);

@@ -16,6 +16,9 @@ namespace Soundboard.App;
 
 public partial class MainWindow : Window
 {
+    private const string SoundDragDataFormat =
+        "Soundboard.SoundLibraryEntryId";
+
     private static readonly TimeSpan SettingsSaveDelay =
         TimeSpan.FromMilliseconds(650);
 
@@ -24,6 +27,8 @@ public partial class MainWindow : Window
     private readonly SoundLibraryStore soundLibraryStore = new();
     private readonly ApplicationSettingsStore settingsStore = new();
     private readonly ObservableCollection<SoundTileViewModel> soundTiles = [];
+    private readonly ObservableCollection<SoundCategory> soundCategories = [];
+    private readonly ObservableCollection<LibraryViewItem> libraryViews = [];
     private readonly SemaphoreSlim libraryActionGate = new(1, 1);
     private readonly SemaphoreSlim soundTriggerGate = new(1, 1);
     private readonly ICollectionView soundTilesView;
@@ -49,6 +54,8 @@ public partial class MainWindow : Window
     private bool isClosing;
     private bool shutdownStarted;
     private bool allowClose;
+    private Point? soundDragStartPoint;
+    private Guid? draggedSoundId;
     private long formatRequestNumber;
 
     public MainWindow()
@@ -58,6 +65,10 @@ public partial class MainWindow : Window
         soundTilesView = CollectionViewSource.GetDefaultView(soundTiles);
         soundTilesView.Filter = FilterSoundTile;
         SoundTilesItemsControl.ItemsSource = soundTilesView;
+        LibraryViewsListBox.ItemsSource = libraryViews;
+        RebuildLibraryViews(
+            SoundLibraryViewKind.AllSounds,
+            categoryId: null);
 
         MicrophoneComboBox.SelectionChanged +=
             DeviceComboBox_SelectionChanged;
@@ -120,12 +131,25 @@ public partial class MainWindow : Window
     private async Task LoadLibraryAndSettingsAsync()
     {
         var libraryResult = await soundLibraryStore.LoadAsync();
+        soundCategories.Clear();
+        foreach (var category in libraryResult.Categories
+                     .OrderBy(category => category.SortOrder))
+        {
+            soundCategories.Add(category);
+        }
+
         soundTiles.Clear();
         foreach (var sound in libraryResult.Sounds)
         {
-            soundTiles.Add(new SoundTileViewModel(sound));
+            soundTiles.Add(
+                new SoundTileViewModel(
+                    sound,
+                    GetCategoryName(sound.CategoryId)));
         }
 
+        RebuildLibraryViews(
+            SoundLibraryViewKind.AllSounds,
+            categoryId: null);
         UpdateLibraryPresentation();
 
         var settingsResult = await settingsStore.LoadAsync();
@@ -608,7 +632,9 @@ public partial class MainWindow : Window
 
         if (dialog.ShowDialog(this) == true)
         {
-            _ = ImportPathsFromUiAsync(dialog.FileNames);
+            _ = ImportPathsFromUiAsync(
+                dialog.FileNames,
+                categoryId: null);
         }
     }
 
@@ -616,6 +642,15 @@ public partial class MainWindow : Window
         object sender,
         DragEventArgs eventArgs)
     {
+        if (eventArgs.Data.GetDataPresent(SoundDragDataFormat))
+        {
+            eventArgs.Effects = CanReorderSounds
+                ? DragDropEffects.Move
+                : DragDropEffects.None;
+            eventArgs.Handled = false;
+            return;
+        }
+
         eventArgs.Effects = eventArgs.Data.GetDataPresent(
             DataFormats.FileDrop)
                 ? DragDropEffects.Copy
@@ -630,12 +665,13 @@ public partial class MainWindow : Window
         if (eventArgs.Data.GetData(DataFormats.FileDrop)
             is string[] paths)
         {
-            _ = ImportPathsFromUiAsync(paths);
+            _ = ImportPathsFromUiAsync(paths, categoryId: null);
         }
     }
 
     private async Task ImportPathsFromUiAsync(
-        IReadOnlyCollection<string> sourcePaths)
+        IReadOnlyCollection<string> sourcePaths,
+        Guid? categoryId)
     {
         if (!await libraryActionGate.WaitAsync(0))
         {
@@ -652,10 +688,15 @@ public partial class MainWindow : Window
 
         try
         {
-            var result = await soundLibraryStore.ImportAsync(sourcePaths);
+            var result = await soundLibraryStore.ImportAsync(
+                sourcePaths,
+                categoryId);
             foreach (var sound in result.Imported)
             {
-                soundTiles.Add(new SoundTileViewModel(sound));
+                soundTiles.Add(
+                    new SoundTileViewModel(
+                        sound,
+                        GetCategoryName(sound.CategoryId)));
             }
 
             soundTilesView.Refresh();
@@ -1214,7 +1255,7 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private async void RenameTileButton_Click(
+    private async void EditTileButton_Click(
         object sender,
         RoutedEventArgs eventArgs)
     {
@@ -1224,7 +1265,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        var dialog = new RenameSoundDialog(tile.DisplayName)
+        var dialog = new EditSoundDialog(
+            tile.Sound,
+            soundCategories.ToArray())
         {
             Owner = this
         };
@@ -1242,25 +1285,81 @@ public partial class MainWindow : Window
 
         try
         {
-            var renamed = await soundLibraryStore.RenameAsync(
+            var updated = await soundLibraryStore.UpdateSoundAsync(
                 tile.Id,
-                dialog.SoundName);
-            tile.ReplaceSound(renamed);
+                new SoundMetadataUpdate(
+                    dialog.SoundName,
+                    dialog.CategoryId,
+                    dialog.IsFavorite,
+                    dialog.TileAccent));
+            tile.ReplaceSound(
+                updated,
+                GetCategoryName(updated.CategoryId));
             if (currentSoundId == tile.Id)
             {
                 CurrentSoundTextBlock.Text =
-                    $"Current sound: {renamed.DisplayName} (playing once)";
+                    $"Current sound: {updated.DisplayName} (playing once)";
             }
 
             soundTilesView.Refresh();
+            UpdateLibraryPresentation();
             ErrorTextBlock.Text = string.Empty;
             StatusTextBlock.Text =
-                $"Renamed sound to \"{renamed.DisplayName}\".";
+                $"Saved metadata for \"{updated.DisplayName}\".";
             RefreshDiagnosticStatus();
+            FocusAfterLibraryMutation(tile.Id);
         }
         catch (Exception exception)
         {
-            ShowUiError($"The sound could not be renamed: {exception.Message}");
+            ShowUiError($"The sound could not be edited: {exception.Message}");
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
+    }
+
+    private async void FavoriteTileButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if ((sender as FrameworkElement)?.Tag
+            is not SoundTileViewModel tile)
+        {
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var updated = await soundLibraryStore.UpdateSoundAsync(
+                tile.Id,
+                new SoundMetadataUpdate(
+                    tile.DisplayName,
+                    tile.Sound.CategoryId,
+                    !tile.IsFavorite,
+                    tile.Sound.TileAccent));
+            tile.ReplaceSound(
+                updated,
+                GetCategoryName(updated.CategoryId));
+            soundTilesView.Refresh();
+            UpdateLibraryPresentation();
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text = updated.IsFavorite
+                ? $"Added \"{updated.DisplayName}\" to Favorites."
+                : $"Removed \"{updated.DisplayName}\" from Favorites.";
+            FocusAfterLibraryMutation(tile.Id);
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"Favorite state could not be saved: {exception.Message}");
         }
         finally
         {
@@ -1301,6 +1400,20 @@ public partial class MainWindow : Window
 
         try
         {
+            var visibleTiles = soundTilesView
+                .Cast<SoundTileViewModel>()
+                .ToList();
+            var removedVisibleIndex = visibleTiles.IndexOf(tile);
+            var focusSoundId = visibleTiles
+                .Where(candidate => candidate.Id != tile.Id)
+                .ElementAtOrDefault(
+                    Math.Max(
+                        0,
+                        Math.Min(
+                            removedVisibleIndex,
+                            visibleTiles.Count - 2)))
+                ?.Id;
+
             if (audioEngine.CurrentSoundId == tile.Id)
             {
                 await Task.Run(audioEngine.StopSound);
@@ -1334,6 +1447,14 @@ public partial class MainWindow : Window
             lastHotkeyAction =
                 $"Removed binding for sound {tile.Id} before removal";
             RefreshDiagnosticStatus();
+            if (focusSoundId is { } nextSoundId)
+            {
+                FocusAfterLibraryMutation(nextSoundId);
+            }
+            else
+            {
+                LibraryViewsListBox.Focus();
+            }
         }
         catch (Exception exception)
         {
@@ -1344,6 +1465,280 @@ public partial class MainWindow : Window
             libraryActionGate.Release();
             UpdateHotkeyPresentation();
         }
+    }
+
+    private async void CreateCategoryButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        var dialog = new CategoryNameDialog(
+            "Create category",
+            "Create category")
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var category = await soundLibraryStore.CreateCategoryAsync(
+                dialog.CategoryName);
+            soundCategories.Add(category);
+            RebuildLibraryViews(
+                SoundLibraryViewKind.Category,
+                category.Id);
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text =
+                $"Created category \"{category.DisplayName}\".";
+            UpdateLibraryPresentation();
+            LibraryViewsListBox.Focus();
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"The category could not be created: {exception.Message}");
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
+    }
+
+    private async void RenameCategoryButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (SelectedLibraryView is not
+            {
+                Kind: SoundLibraryViewKind.Category,
+                CategoryId: { } categoryId
+            } selected)
+        {
+            return;
+        }
+
+        var dialog = new CategoryNameDialog(
+            "Rename category",
+            "Rename category",
+            selected.DisplayName)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var renamed = await soundLibraryStore.RenameCategoryAsync(
+                categoryId,
+                dialog.CategoryName);
+            var index = soundCategories
+                .Select((category, itemIndex) => (category, itemIndex))
+                .First(item => item.category.Id == categoryId)
+                .itemIndex;
+            soundCategories[index] = renamed;
+            foreach (var tile in soundTiles.Where(
+                         tile => tile.Sound.CategoryId == categoryId))
+            {
+                tile.SetCategoryName(renamed.DisplayName);
+            }
+
+            RebuildLibraryViews(
+                SoundLibraryViewKind.Category,
+                categoryId);
+            soundTilesView.Refresh();
+            UpdateLibraryPresentation();
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text =
+                $"Renamed category to \"{renamed.DisplayName}\".";
+            LibraryViewsListBox.Focus();
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"The category could not be renamed: {exception.Message}");
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
+    }
+
+    private async void DeleteCategoryButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (SelectedLibraryView is not
+            {
+                Kind: SoundLibraryViewKind.Category,
+                CategoryId: { } categoryId
+            } selected)
+        {
+            return;
+        }
+
+        var assignedCount = soundTiles.Count(
+            tile => tile.Sound.CategoryId == categoryId);
+        var confirmation = MessageBox.Show(
+            this,
+            $"Delete category \"{selected.DisplayName}\"? "
+            + $"{assignedCount} visible sound(s) will move to "
+            + "Uncategorized. No sounds or managed audio files will be "
+            + "deleted.",
+            "Delete category",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var result = await soundLibraryStore.DeleteCategoryAsync(
+                categoryId);
+            ReplaceCategories(result.Categories);
+            var soundsById = result.Sounds.ToDictionary(sound => sound.Id);
+            foreach (var tile in soundTiles)
+            {
+                if (soundsById.TryGetValue(tile.Id, out var updated))
+                {
+                    tile.ReplaceSound(
+                        updated,
+                        GetCategoryName(updated.CategoryId));
+                }
+            }
+
+            RebuildLibraryViews(
+                SoundLibraryViewKind.Uncategorized,
+                categoryId: null);
+            soundTilesView.Refresh();
+            UpdateLibraryPresentation();
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text =
+                $"Deleted category \"{selected.DisplayName}\" and moved "
+                + $"{result.UncategorizedSoundCount} sound(s) to "
+                + "Uncategorized.";
+            LibraryViewsListBox.Focus();
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"The category could not be deleted: {exception.Message}");
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
+    }
+
+    private async void MoveCategoryUpButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await MoveSelectedCategoryAsync(-1);
+    }
+
+    private async void MoveCategoryDownButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await MoveSelectedCategoryAsync(1);
+    }
+
+    private async Task MoveSelectedCategoryAsync(int offset)
+    {
+        if (SelectedLibraryView is not
+            {
+                Kind: SoundLibraryViewKind.Category,
+                CategoryId: { } categoryId
+            })
+        {
+            return;
+        }
+
+        var currentIndex = soundCategories
+            .Select((category, index) => (category, index))
+            .First(item => item.category.Id == categoryId)
+            .index;
+        var newIndex = currentIndex + offset;
+        if (newIndex < 0 || newIndex >= soundCategories.Count)
+        {
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var orderedIds = soundCategories
+                .Select(category => category.Id)
+                .ToList();
+            (orderedIds[currentIndex], orderedIds[newIndex]) =
+                (orderedIds[newIndex], orderedIds[currentIndex]);
+            var reordered =
+                await soundLibraryStore.ReorderCategoriesAsync(orderedIds);
+            ReplaceCategories(reordered);
+            RebuildLibraryViews(
+                SoundLibraryViewKind.Category,
+                categoryId);
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text =
+                $"Moved category {(
+                    offset < 0 ? "earlier" : "later")}.";
+            LibraryViewsListBox.Focus();
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"The category order could not be saved: "
+                + exception.Message);
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
+    }
+
+    private void LibraryViewsListBox_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs eventArgs)
+    {
+        soundTilesView?.Refresh();
+        UpdateLibraryPresentation();
+        UpdateCategoryControlAvailability();
     }
 
     private void SearchTextBox_TextChanged(
@@ -1361,11 +1756,222 @@ public partial class MainWindow : Window
             return false;
         }
 
-        var search = SearchTextBox?.Text.Trim();
-        return string.IsNullOrEmpty(search)
-            || tile.DisplayName.Contains(
-                search,
-                StringComparison.OrdinalIgnoreCase);
+        var selectedView = SelectedLibraryView
+            ?? libraryViews.FirstOrDefault();
+        return selectedView is not null
+            && SoundLibraryFilter.MatchesView(
+                tile.Sound,
+                selectedView)
+            && SoundLibraryFilter.MatchesSearch(
+                tile.Sound,
+                tile.CategoryName,
+                SearchTextBox?.Text);
+    }
+
+    private void SoundDragHandle_PreviewMouseLeftButtonDown(
+        object sender,
+        MouseButtonEventArgs eventArgs)
+    {
+        if ((sender as FrameworkElement)?.Tag
+            is not SoundTileViewModel tile
+            || !CanReorderSounds)
+        {
+            soundDragStartPoint = null;
+            draggedSoundId = null;
+            return;
+        }
+
+        soundDragStartPoint = eventArgs.GetPosition(this);
+        draggedSoundId = tile.Id;
+    }
+
+    private void SoundDragHandle_PreviewMouseMove(
+        object sender,
+        MouseEventArgs eventArgs)
+    {
+        if (eventArgs.LeftButton != MouseButtonState.Pressed
+            || soundDragStartPoint is not { } startPoint
+            || draggedSoundId is not { } soundId
+            || !CanReorderSounds)
+        {
+            return;
+        }
+
+        var currentPoint = eventArgs.GetPosition(this);
+        if (Math.Abs(currentPoint.X - startPoint.X)
+                < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(currentPoint.Y - startPoint.Y)
+                < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        soundDragStartPoint = null;
+        var data = new DataObject();
+        data.SetData(SoundDragDataFormat, soundId.ToString("D"));
+        try
+        {
+            _ = DragDrop.DoDragDrop(
+                (DependencyObject)sender,
+                data,
+                DragDropEffects.Move);
+        }
+        finally
+        {
+            draggedSoundId = null;
+        }
+    }
+
+    private void SoundTile_DragOver(
+        object sender,
+        DragEventArgs eventArgs)
+    {
+        eventArgs.Effects =
+            CanReorderSounds
+            && eventArgs.Data.GetDataPresent(SoundDragDataFormat)
+                ? DragDropEffects.Move
+                : DragDropEffects.None;
+        eventArgs.Handled = true;
+    }
+
+    private async void SoundTile_Drop(
+        object sender,
+        DragEventArgs eventArgs)
+    {
+        try
+        {
+            if (!CanReorderSounds
+                || (sender as FrameworkElement)?.Tag
+                    is not SoundTileViewModel target
+                || eventArgs.Data.GetData(SoundDragDataFormat)
+                    is not string sourceText
+                || !Guid.TryParse(sourceText, out var sourceId)
+                || sourceId == target.Id)
+            {
+                return;
+            }
+
+            var orderedIds = soundTilesView
+                .Cast<SoundTileViewModel>()
+                .Select(tile => tile.Id)
+                .ToList();
+            if (!orderedIds.Remove(sourceId))
+            {
+                return;
+            }
+
+            var targetIndex = orderedIds.IndexOf(target.Id);
+            if (targetIndex < 0)
+            {
+                return;
+            }
+
+            if (eventArgs.GetPosition((IInputElement)sender).Y
+                > ((FrameworkElement)sender).ActualHeight / 2)
+            {
+                targetIndex++;
+            }
+
+            orderedIds.Insert(targetIndex, sourceId);
+            eventArgs.Handled = true;
+            await PersistVisibleSoundOrderAsync(
+                orderedIds,
+                sourceId);
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"The sound order could not be changed: "
+                + exception.Message);
+        }
+    }
+
+    private async void MoveSoundEarlierMenuItem_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await MoveSoundByKeyboardAsync(sender, -1);
+    }
+
+    private async void MoveSoundLaterMenuItem_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await MoveSoundByKeyboardAsync(sender, 1);
+    }
+
+    private async Task MoveSoundByKeyboardAsync(
+        object sender,
+        int offset)
+    {
+        if ((sender as FrameworkElement)?.Tag
+            is not SoundTileViewModel tile
+            || !CanReorderSounds)
+        {
+            return;
+        }
+
+        var orderedIds = soundTilesView
+            .Cast<SoundTileViewModel>()
+            .Select(item => item.Id)
+            .ToList();
+        var currentIndex = orderedIds.IndexOf(tile.Id);
+        var newIndex = currentIndex + offset;
+        if (currentIndex < 0
+            || newIndex < 0
+            || newIndex >= orderedIds.Count)
+        {
+            return;
+        }
+
+        (orderedIds[currentIndex], orderedIds[newIndex]) =
+            (orderedIds[newIndex], orderedIds[currentIndex]);
+        await PersistVisibleSoundOrderAsync(orderedIds, tile.Id);
+    }
+
+    private async Task PersistVisibleSoundOrderAsync(
+        IReadOnlyList<Guid> orderedIds,
+        Guid focusSoundId)
+    {
+        if (!CanReorderSounds)
+        {
+            ShowUiError(ReorderAvailabilityText);
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            var selectedView = SelectedLibraryView
+                ?? throw new InvalidOperationException(
+                    "Select a library view before reordering.");
+            var persisted = await soundLibraryStore.ReorderSoundsAsync(
+                orderedIds,
+                selectedView.CategoryId,
+                selectedView.Kind == SoundLibraryViewKind.AllSounds);
+            ApplyPersistedSoundOrder(persisted);
+            soundTilesView.Refresh();
+            UpdateLibraryPresentation();
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text = "Saved the manual sound order.";
+            FocusAfterLibraryMutation(focusSoundId);
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                "The sound order could not be saved. The previous visible "
+                + $"order was restored: {exception.Message}");
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
     }
 
     private void AudioEngine_StateChanged(
@@ -1496,6 +2102,172 @@ public partial class MainWindow : Window
         return soundTiles.FirstOrDefault(tile => tile.Id == soundId);
     }
 
+    private LibraryViewItem? SelectedLibraryView =>
+        LibraryViewsListBox?.SelectedItem as LibraryViewItem;
+
+    private bool CanReorderSounds
+    {
+        get
+        {
+            return SoundLibraryFilter.CanReorder(
+                SelectedLibraryView,
+                SearchTextBox?.Text);
+        }
+    }
+
+    private string ReorderAvailabilityText
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(SearchTextBox?.Text))
+            {
+                return "Clear search to reorder sounds.";
+            }
+
+            if (SelectedLibraryView?.Kind
+                == SoundLibraryViewKind.Favorites)
+            {
+                return "Sound ordering is unavailable in Favorites. "
+                    + "Choose All Sounds, Uncategorized, or a category.";
+            }
+
+            return "Drag the handle or use Move earlier/Move later.";
+        }
+    }
+
+    private string GetCategoryName(Guid? categoryId)
+    {
+        return categoryId is null
+            ? "Uncategorized"
+            : soundCategories.FirstOrDefault(
+                    category => category.Id == categoryId)
+                ?.DisplayName
+                ?? "Uncategorized";
+    }
+
+    private void RebuildLibraryViews(
+        SoundLibraryViewKind preferredKind,
+        Guid? categoryId)
+    {
+        libraryViews.Clear();
+        libraryViews.Add(
+            new LibraryViewItem(
+                SoundLibraryViewKind.AllSounds,
+                "All Sounds"));
+        libraryViews.Add(
+            new LibraryViewItem(
+                SoundLibraryViewKind.Favorites,
+                "Favorites"));
+        libraryViews.Add(
+            new LibraryViewItem(
+                SoundLibraryViewKind.Uncategorized,
+                "Uncategorized"));
+        foreach (var category in soundCategories
+                     .OrderBy(category => category.SortOrder))
+        {
+            libraryViews.Add(
+                new LibraryViewItem(
+                    SoundLibraryViewKind.Category,
+                    category.DisplayName,
+                    category.Id));
+        }
+
+        var selected = libraryViews.FirstOrDefault(
+                view =>
+                    view.Kind == preferredKind
+                    && view.CategoryId == categoryId)
+            ?? libraryViews[0];
+        LibraryViewsListBox.SelectedItem = selected;
+        UpdateCategoryControlAvailability();
+    }
+
+    private void ReplaceCategories(
+        IEnumerable<SoundCategory> replacements)
+    {
+        soundCategories.Clear();
+        foreach (var category in replacements
+                     .OrderBy(category => category.SortOrder))
+        {
+            soundCategories.Add(category);
+        }
+    }
+
+    private void ApplyPersistedSoundOrder(
+        IReadOnlyList<SoundLibraryEntry> persistedSounds)
+    {
+        var persistedById = persistedSounds.ToDictionary(sound => sound.Id);
+        foreach (var tile in soundTiles)
+        {
+            if (persistedById.TryGetValue(tile.Id, out var persisted))
+            {
+                tile.ReplaceSound(
+                    persisted,
+                    GetCategoryName(persisted.CategoryId));
+            }
+        }
+
+        var desired = soundTiles
+            .OrderBy(tile => tile.Sound.SortOrder)
+            .ToList();
+        for (var index = 0; index < desired.Count; index++)
+        {
+            var currentIndex = soundTiles.IndexOf(desired[index]);
+            if (currentIndex != index)
+            {
+                soundTiles.Move(currentIndex, index);
+            }
+        }
+    }
+
+    private void UpdateCategoryControlAvailability()
+    {
+        if (RenameCategoryButton is null)
+        {
+            return;
+        }
+
+        var categoryId = SelectedLibraryView?.Kind
+            == SoundLibraryViewKind.Category
+                ? SelectedLibraryView.CategoryId
+                : null;
+        var index = categoryId is null
+            ? -1
+            : soundCategories
+                .Select((category, itemIndex) => (category, itemIndex))
+                .Where(item => item.category.Id == categoryId)
+                .Select(item => item.itemIndex)
+                .DefaultIfEmpty(-1)
+                .First();
+        RenameCategoryButton.IsEnabled = categoryId is not null;
+        DeleteCategoryButton.IsEnabled = categoryId is not null;
+        MoveCategoryUpButton.IsEnabled = index > 0;
+        MoveCategoryDownButton.IsEnabled =
+            index >= 0 && index < soundCategories.Count - 1;
+    }
+
+    private void FocusAfterLibraryMutation(Guid preferredSoundId)
+    {
+        _ = Dispatcher.BeginInvoke(
+            () =>
+            {
+                var tile = FindTile(preferredSoundId);
+                if (tile is not null && FilterSoundTile(tile))
+                {
+                    if (SoundTilesItemsControl.ItemContainerGenerator
+                            .ContainerFromItem(tile)
+                        is UIElement container)
+                    {
+                        container.MoveFocus(
+                            new TraversalRequest(
+                                FocusNavigationDirection.First));
+                        return;
+                    }
+                }
+
+                LibraryViewsListBox.Focus();
+            });
+    }
+
     private void UpdateControlAvailability()
     {
         var state = audioEngine.State;
@@ -1537,6 +2309,7 @@ public partial class MainWindow : Window
         StopSoundButton.IsEnabled =
             state == AudioEngineState.Running
             && audioEngine.IsSoundPlaying;
+        UpdateCategoryControlAvailability();
         UpdateMonitorStatusForSelection();
     }
 
@@ -1544,15 +2317,39 @@ public partial class MainWindow : Window
     {
         var visibleCount = soundTilesView?.Cast<object>().Count()
             ?? soundTiles.Count;
-        SoundCountTextBlock.Text = visibleCount == soundTiles.Count
-            ? $"{soundTiles.Count} sound(s)"
-            : $"{visibleCount} of {soundTiles.Count} sound(s)";
+        var selectedView = SelectedLibraryView
+            ?? libraryViews.FirstOrDefault();
+        SoundCountTextBlock.Text =
+            $"{visibleCount} visible · {soundTiles.Count} total";
+        SelectedViewTextBlock.Text =
+            $"View: {selectedView?.DisplayName ?? "All Sounds"}";
+        EmptyLibraryTextBlock.Text = soundTiles.Count == 0
+            ? "No sounds yet. Import WAV or MP3 files, or drop them here."
+            : !string.IsNullOrWhiteSpace(SearchTextBox?.Text)
+                ? "No sounds match the current search."
+                : selectedView?.Kind == SoundLibraryViewKind.Favorites
+                    ? "No favorite sounds yet."
+                    : selectedView?.Kind
+                        is SoundLibraryViewKind.Category
+                            or SoundLibraryViewKind.Uncategorized
+                        ? $"No sounds in "
+                            + $"\"{selectedView.DisplayName}\" yet."
+                        : "No sounds are visible in this view.";
         EmptyLibraryTextBlock.Visibility = visibleCount == 0
             ? Visibility.Visible
             : Visibility.Collapsed;
         SoundTilesItemsControl.Visibility = visibleCount == 0
             ? Visibility.Collapsed
             : Visibility.Visible;
+
+        var canReorder = CanReorderSounds;
+        var availabilityText = ReorderAvailabilityText;
+        ReorderHelpTextBlock.Text = availabilityText;
+        foreach (var tile in soundTiles)
+        {
+            tile.CanReorder = canReorder;
+            tile.ReorderAvailabilityText = availabilityText;
+        }
     }
 
     private void UpdateHotkeyPresentation()

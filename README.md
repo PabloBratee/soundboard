@@ -16,7 +16,10 @@ audio endpoint for Discord or a game.
   final-output meter;
 - provides independent monitor volume and monitor-output peak metering;
 - imports multiple audio files into a persistent local library;
-- supports drag-and-drop import, tile playback, search, rename, and remove;
+- supports built-in library views, user categories, favorites, preset tile
+  accents, editing, search, and persistent manual ordering;
+- supports drag-and-drop import, handle-based tile reordering, keyboard
+  reordering, tile playback, and remove;
 - supports one optional persistent Windows global hotkey per sound plus an
   optional Stop Sound hotkey;
 - detects duplicate content with a SHA-256 hash; and
@@ -54,14 +57,27 @@ Runtime data is stored under the current user's local application-data folder:
     └── <generated-id>.mp3
 ```
 
-`library.json` stores a schema version and sound records containing a stable
-ID, display name, managed filename, original filename, WAV/MP3 type, duration,
-UTC import date, sort order, SHA-256 content hash, and an optional hotkey.
+`library.json` uses schema version 3. It stores user categories with a stable
+GUID, display name, normalized sort order, and UTC creation date. Sound records
+contain a stable GUID, display name, managed filename, original filename,
+WAV/MP3 type, duration, UTC import date, normalized manual sort order, SHA-256
+content hash, optional hotkey, optional category GUID, favorite state, and a
+controlled tile-accent preset.
 `settings.json` stores the global-hotkey enabled state and optional Stop Sound
 hotkey alongside the existing audio and window settings. JSON saves use a
 temporary file and atomic replacement. A malformed library file is preserved
 as `library.malformed-<timestamp>.json` before Soundboard creates an empty
 library.
+
+Version 1 and version 2 libraries migrate to schema version 3 during startup.
+Their existing sound sequence, stable IDs, names, managed filenames, original
+filenames, durations, content hashes, and hotkeys are retained. New metadata
+defaults to Uncategorized, not favorite, and the Default tile accent. Invalid
+new metadata falls back to those safe defaults with a concise startup warning
+instead of dropping the sound. Sound and category sort orders are normalized
+to unique consecutive values while preserving the established sequence. The
+migrated document is then saved with the same atomic replacement used by
+normal library mutations.
 
 Importing copies audio into `Sounds` with a generated filename. Soundboard
 never modifies or deletes the original source file. Removing a tile deletes
@@ -186,23 +202,71 @@ warning is shown. The primary microphone-plus-sound path remains running when
 technically possible. Stop the engine, select another physical output, and
 start it again. Soundboard does not silently switch outputs while running.
 
-## Import and manage sounds
+## Organize and manage sounds
 
 Use **Import sounds** to select multiple `.wav` and `.mp3` files, or drag files
 onto the soundboard area. Every candidate is opened through the audio-reading
 stack, inspected for duration, hashed, and then copied into the managed
 library. Invalid and unreadable files are skipped without blocking valid
-files.
+files. New imports are Uncategorized, not favorite, use the Default tile
+accent, and appear at the end of the global manual order. File drops onto the
+general soundboard area use the same defaults. Category-targeted file drop is
+not currently implemented; assign the category through **Edit** after import.
 
 If the same content is imported again, Soundboard does not create another
 managed copy. The summary identifies the existing sound by display name.
 Duplicate detection is based on file content, not the source path or filename.
 
-Search performs a case-insensitive display-name substring match. Rename changes
-only the display name in metadata, not either audio filename. Duplicate display
-names are allowed. Remove asks for confirmation and deletes metadata plus the
-managed copy; if managed-file deletion fails, Soundboard reports the failure
-and rolls the library back instead of claiming success.
+The left library panel contains three fixed, non-deletable views:
+
+- **All Sounds** shows the complete library in global manual order.
+- **Favorites** shows favorite sounds without changing their global positions.
+- **Uncategorized** shows sounds with no category assignment.
+
+User categories are a single flat level below those built-in views. Category
+names are trimmed, limited to 60 characters, and unique
+case-insensitively. Use **Create category**, **Rename**, and **Delete** in the
+library panel. The **Move up** and **Move down** buttons reorder user
+categories; built-in views remain fixed. Renaming a category retains its
+position. Deleting asks for confirmation, moves its sounds to Uncategorized
+without changing their relative order, and never deletes their managed audio
+files.
+
+Each tile has a star control with an accessible **Add to favorites** or
+**Remove from favorites** name. Favorite changes persist immediately and the
+Favorites view refreshes immediately. A filtered-out sound retains its global
+hotkey and remains playable through that hotkey while the app and audio engine
+are running.
+
+Use **Edit** to change a sound's trimmed display name, category, favorite
+state, and one of the controlled Default, Blue, Purple, Green, Orange, Red,
+Pink, or Teal accent presets in one atomic metadata update. The dialog also
+shows the original filename, duration, and assigned hotkey without editing
+them. Hotkeys remain in the dedicated hotkey dialog. Editing does not rename
+the managed audio file and does not stop a playing sound; its stable sound ID
+and visible Playing state remain attached to the same tile.
+
+Search is a case-insensitive substring match against display name, original
+filename, and category name. The selected library view is applied first,
+search second, and persistent manual order last. The interface displays the
+selected view, visible count, total count, and distinct empty messages for an
+empty library, empty category, empty Favorites view, and search with no
+matches.
+
+In All Sounds, drag a tile's dedicated `↕` handle to change the global sound
+sequence. In Uncategorized or a user category, dragging changes the relative
+order of sounds in that view while preserving sounds outside it. Search must
+be empty. Reordering is disabled in Favorites and while search is active, with
+an explanation shown above the tiles. A cancelled drag or a drop outside a
+tile changes nothing; only a completed valid drop is saved. Right-click a tile
+or press Shift+F10 and choose **Move earlier** or **Move later** for the
+keyboard-accessible alternative. Tile clicks continue to play sounds and tile
+buttons remain independent from the drag handle.
+
+Remove asks for confirmation and deletes metadata plus the managed copy; the
+original imported file is never modified. If managed-file deletion fails,
+Soundboard reports the failure and rolls the library back instead of claiming
+success.
 
 Missing or unreadable managed files are skipped during startup with a warning
 that identifies the metadata and local storage path. Restore the complete
@@ -344,7 +408,9 @@ service the selected endpoints reliably at that time.
   sound-only monitor endpoint;
 - one WAV or MP3 sound effect at a time;
 - mono/stereo sources and mono/stereo output only;
-- no categories, favorites, custom tile images, or custom tile colors;
+- one optional flat category per sound; no nested folders or tags;
+- preset tile accents only; no arbitrary color picker or custom tile images;
+- category-targeted file drop is not implemented;
 - no hotkey profiles, per-game profiles, trimming, waveform editor, fades, or
   normalization;
 - no gate, compression, limiter, or other audio processing;

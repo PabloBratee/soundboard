@@ -435,123 +435,281 @@
                     </Grid>
                 </Border>
 
-                <Border x:Name="SoundboardDropArea"
-                        MinHeight="245"
-                        Padding="10"
-                        AllowDrop="True"
-                        Background="#F9FAFB"
-                        BorderBrush="#BFC7D1"
-                        BorderThickness="1"
-                        CornerRadius="6"
-                        Drop="SoundboardDropArea_Drop"
-                        PreviewDragOver="SoundboardDropArea_PreviewDragOver">
-                    <Grid>
-                        <TextBlock x:Name="EmptyLibraryTextBlock"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   FontSize="16"
-                                   Foreground="#66717E"
-                                   Text="No sounds yet. Import WAV or MP3 files, or drop them here."
-                                   TextAlignment="Center"
-                                   TextWrapping="Wrap" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="185" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                        <ItemsControl x:Name="SoundTilesItemsControl">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border x:Name="TileBorder"
-                                            Width="222"
-                                            MinHeight="192"
-                                            Margin="7"
-                                            Padding="10"
-                                            Background="White"
-                                            BorderBrush="#CBD2DA"
-                                            BorderThickness="1"
-                                            CornerRadius="6">
-                                        <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="*" />
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="Auto" />
-                                            </Grid.RowDefinitions>
-                                            <Button Padding="8"
-                                                    HorizontalContentAlignment="Stretch"
-                                                    Background="Transparent"
-                                                    BorderThickness="0"
-                                                    Click="PlayTileButton_Click"
+                    <Border Padding="10"
+                            Background="White"
+                            BorderBrush="#BFC7D1"
+                            BorderThickness="1"
+                            CornerRadius="6">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Top">
+                                <TextBlock FontSize="16"
+                                           FontWeight="SemiBold"
+                                           Text="Library" />
+                                <TextBlock Margin="0,4,0,10"
+                                           Foreground="#596574"
+                                           Text="Built-in views are fixed. User categories follow."
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                            <StackPanel DockPanel.Dock="Bottom"
+                                        Margin="0,10,0,0">
+                                <Button Padding="7,5"
+                                        Click="CreateCategoryButton_Click"
+                                        Content="Create category"
+                                        AutomationProperties.Name="Create category" />
+                                <WrapPanel Margin="0,7,0,0">
+                                    <Button x:Name="RenameCategoryButton"
+                                            Margin="0,0,5,5"
+                                            Padding="7,4"
+                                            Click="RenameCategoryButton_Click"
+                                            Content="Rename"
+                                            AutomationProperties.Name="Rename selected category" />
+                                    <Button x:Name="DeleteCategoryButton"
+                                            Margin="0,0,0,5"
+                                            Padding="7,4"
+                                            Click="DeleteCategoryButton_Click"
+                                            Content="Delete"
+                                            AutomationProperties.Name="Delete selected category" />
+                                    <Button x:Name="MoveCategoryUpButton"
+                                            Margin="0,0,5,0"
+                                            Padding="7,4"
+                                            Click="MoveCategoryUpButton_Click"
+                                            Content="Move up"
+                                            AutomationProperties.Name="Move selected category earlier" />
+                                    <Button x:Name="MoveCategoryDownButton"
+                                            Padding="7,4"
+                                            Click="MoveCategoryDownButton_Click"
+                                            Content="Move down"
+                                            AutomationProperties.Name="Move selected category later" />
+                                </WrapPanel>
+                            </StackPanel>
+                            <ListBox x:Name="LibraryViewsListBox"
+                                     MinHeight="150"
+                                     BorderThickness="0"
+                                     SelectionChanged="LibraryViewsListBox_SelectionChanged"
+                                     AutomationProperties.Name="Library views and categories">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="AutomationProperties.Name"
+                                                Value="{Binding DisplayName}" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Padding="4,5"
+                                                   Text="{Binding DisplayName}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding DisplayName}" />
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </Border>
+
+                    <StackPanel Grid.Column="2">
+                        <Grid Margin="2,0,2,7">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SelectedViewTextBlock"
+                                       FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Text="View: All Sounds" />
+                            <TextBlock x:Name="ReorderHelpTextBlock"
+                                       Grid.Column="1"
+                                       MaxWidth="330"
+                                       Foreground="#596574"
+                                       Text="Drag the handle or use Move earlier/Move later."
+                                       TextAlignment="Right"
+                                       TextWrapping="Wrap" />
+                        </Grid>
+
+                        <Border x:Name="SoundboardDropArea"
+                                MinHeight="245"
+                                Padding="10"
+                                AllowDrop="True"
+                                Background="#F9FAFB"
+                                BorderBrush="#BFC7D1"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Drop="SoundboardDropArea_Drop"
+                                PreviewDragOver="SoundboardDropArea_PreviewDragOver">
+                            <Grid>
+                                <TextBlock x:Name="EmptyLibraryTextBlock"
+                                           MaxWidth="420"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           FontSize="16"
+                                           Foreground="#66717E"
+                                           Text="No sounds yet. Import WAV or MP3 files, or drop them here."
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap" />
+
+                                <ItemsControl x:Name="SoundTilesItemsControl">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border x:Name="TileBorder"
+                                                    Width="246"
+                                                    MinHeight="254"
+                                                    Margin="7"
+                                                    Padding="10"
+                                                    AllowDrop="True"
+                                                    Background="{Binding TileBackground}"
+                                                    BorderBrush="{Binding TileBorderBrush}"
+                                                    BorderThickness="2"
+                                                    CornerRadius="6"
+                                                    DragOver="SoundTile_DragOver"
+                                                    Drop="SoundTile_Drop"
                                                     Tag="{Binding}">
-                                                <StackPanel>
-                                                    <TextBlock FontSize="16"
-                                                               FontWeight="SemiBold"
-                                                               Text="{Binding DisplayName}"
-                                                               TextAlignment="Left"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               ToolTip="{Binding DisplayName}" />
-                                                    <TextBlock Margin="0,6,0,0"
-                                                               Foreground="#596574"
-                                                               Text="{Binding DurationText}"
-                                                               TextAlignment="Left" />
-                                                    <TextBlock Margin="0,8,0,0"
-                                                               FontWeight="SemiBold"
-                                                               Text="{Binding PlayingLabel}"
-                                                               TextAlignment="Left" />
-                                                    <TextBlock Margin="0,10,0,0"
-                                                               FontWeight="SemiBold"
-                                                               Text="{Binding HotkeyDisplayText}"
-                                                               TextAlignment="Left" />
-                                                    <TextBlock Margin="0,3,0,0"
-                                                               Foreground="#596574"
-                                                               Text="{Binding HotkeyStateText}"
-                                                               TextAlignment="Left"
-                                                               TextWrapping="Wrap"
-                                                               ToolTip="{Binding HotkeyError}" />
-                                                </StackPanel>
-                                            </Button>
-                                            <Separator Grid.Row="1"
-                                                       Margin="0,6" />
-                                            <StackPanel Grid.Row="2"
-                                                        HorizontalAlignment="Right"
-                                                        Orientation="Horizontal">
-                                                <Button Padding="8,4"
-                                                        Click="AssignTileHotkeyButton_Click"
-                                                        Content="Assign hotkey"
-                                                        Tag="{Binding}" />
-                                                <Button Padding="8,4"
-                                                        Margin="7,0,0,0"
-                                                        Click="RenameTileButton_Click"
-                                                        Content="Rename"
-                                                        Tag="{Binding}" />
-                                                <Button Margin="7,0,0,0"
-                                                        Padding="8,4"
-                                                        Click="RemoveTileButton_Click"
-                                                        Content="Remove"
-                                                        Tag="{Binding}" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-                                    <DataTemplate.Triggers>
-                                        <DataTrigger Binding="{Binding IsPlaying}"
-                                                     Value="True">
-                                            <Setter TargetName="TileBorder"
-                                                    Property="BorderBrush"
-                                                    Value="#1967A3" />
-                                            <Setter TargetName="TileBorder"
-                                                    Property="BorderThickness"
-                                                    Value="3" />
-                                            <Setter TargetName="TileBorder"
-                                                    Property="Background"
-                                                    Value="#EAF4FC" />
-                                        </DataTrigger>
-                                    </DataTemplate.Triggers>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </Grid>
-                </Border>
+                                                <Border.ContextMenu>
+                                                    <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                        <MenuItem Header="Move earlier"
+                                                                  IsEnabled="{Binding CanReorder}"
+                                                                  Click="MoveSoundEarlierMenuItem_Click"
+                                                                  Tag="{Binding}"
+                                                                  AutomationProperties.Name="Move sound earlier" />
+                                                        <MenuItem Header="Move later"
+                                                                  IsEnabled="{Binding CanReorder}"
+                                                                  Click="MoveSoundLaterMenuItem_Click"
+                                                                  Tag="{Binding}"
+                                                                  AutomationProperties.Name="Move sound later" />
+                                                    </ContextMenu>
+                                                </Border.ContextMenu>
+                                                <Grid>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="*" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="Auto" />
+                                                    </Grid.RowDefinitions>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <Button Width="32"
+                                                                Height="28"
+                                                                Padding="2"
+                                                                IsEnabled="{Binding CanReorder}"
+                                                                PreviewMouseLeftButtonDown="SoundDragHandle_PreviewMouseLeftButtonDown"
+                                                                PreviewMouseMove="SoundDragHandle_PreviewMouseMove"
+                                                                Content="↕"
+                                                                Tag="{Binding}"
+                                                                ToolTip="{Binding ReorderAvailabilityText}"
+                                                                AutomationProperties.Name="Drag to reorder sound" />
+                                                        <TextBlock Grid.Column="1"
+                                                                   Margin="7,0"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="#596574"
+                                                                   Text="{Binding FavoriteStateText}" />
+                                                        <Button Grid.Column="2"
+                                                                Width="34"
+                                                                Height="28"
+                                                                Padding="2"
+                                                                Click="FavoriteTileButton_Click"
+                                                                Content="{Binding FavoriteGlyph}"
+                                                                Tag="{Binding}"
+                                                                ToolTip="{Binding FavoriteActionText}"
+                                                                AutomationProperties.Name="{Binding FavoriteActionText}" />
+                                                    </Grid>
+
+                                                    <Button Grid.Row="1"
+                                                            Margin="0,5,0,0"
+                                                            Padding="8"
+                                                            HorizontalContentAlignment="Stretch"
+                                                            Background="Transparent"
+                                                            BorderThickness="0"
+                                                            Click="PlayTileButton_Click"
+                                                            Tag="{Binding}"
+                                                            AutomationProperties.Name="{Binding DisplayName, StringFormat=Play sound {0}}">
+                                                        <StackPanel>
+                                                            <TextBlock FontSize="16"
+                                                                       FontWeight="SemiBold"
+                                                                       Text="{Binding DisplayName}"
+                                                                       TextAlignment="Left"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       ToolTip="{Binding DisplayName}" />
+                                                            <TextBlock Margin="0,5,0,0"
+                                                                       Foreground="#596574"
+                                                                       Text="{Binding DurationText}"
+                                                                       TextAlignment="Left" />
+                                                            <TextBlock Margin="0,4,0,0"
+                                                                       Foreground="#596574"
+                                                                       Text="{Binding CategoryName}"
+                                                                       TextAlignment="Left"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                            <TextBlock Margin="0,7,0,0"
+                                                                       FontWeight="SemiBold"
+                                                                       Text="{Binding PlayingLabel}"
+                                                                       TextAlignment="Left" />
+                                                            <TextBlock Margin="0,8,0,0"
+                                                                       FontWeight="SemiBold"
+                                                                       Text="{Binding HotkeyDisplayText}"
+                                                                       TextAlignment="Left" />
+                                                            <TextBlock Margin="0,3,0,0"
+                                                                       Foreground="#596574"
+                                                                       Text="{Binding HotkeyStateText}"
+                                                                       TextAlignment="Left"
+                                                                       TextWrapping="Wrap"
+                                                                       ToolTip="{Binding HotkeyError}" />
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <Separator Grid.Row="2"
+                                                               Margin="0,6" />
+                                                    <StackPanel Grid.Row="3"
+                                                                HorizontalAlignment="Right"
+                                                                Orientation="Horizontal">
+                                                        <Button Padding="7,4"
+                                                                Click="AssignTileHotkeyButton_Click"
+                                                                Content="Hotkey"
+                                                                Tag="{Binding}"
+                                                                AutomationProperties.Name="Assign or change sound hotkey" />
+                                                        <Button Padding="7,4"
+                                                                Margin="6,0,0,0"
+                                                                Click="EditTileButton_Click"
+                                                                Content="Edit"
+                                                                Tag="{Binding}"
+                                                                AutomationProperties.Name="Edit sound metadata" />
+                                                        <Button Margin="6,0,0,0"
+                                                                Padding="7,4"
+                                                                Click="RemoveTileButton_Click"
+                                                                Content="Remove"
+                                                                Tag="{Binding}"
+                                                                AutomationProperties.Name="Remove sound" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsPlaying}"
+                                                             Value="True">
+                                                    <Setter TargetName="TileBorder"
+                                                            Property="BorderBrush"
+                                                            Value="#1967A3" />
+                                                    <Setter TargetName="TileBorder"
+                                                            Property="BorderThickness"
+                                                            Value="4" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </Grid>
 
                 <Expander Margin="0,14,0,0"
                           Header="Diagnostics">
