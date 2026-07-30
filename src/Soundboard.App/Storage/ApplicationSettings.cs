@@ -41,5 +41,7 @@ public sealed record ApplicationSettings
 
     public double? WindowHeight { get; init; }
 
+    public bool WindowMaximized { get; init; }
+
     public static ApplicationSettings Default { get; } = new();
 }

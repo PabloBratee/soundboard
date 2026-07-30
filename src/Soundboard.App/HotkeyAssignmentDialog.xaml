@@ -2,14 +2,20 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Assign hotkey"
-        Width="480"
-        Height="285"
-        MinWidth="420"
+        Width="520"
+        Height="392"
+        MinWidth="440"
+        Background="{StaticResource AppBackgroundBrush}"
+        FontFamily="{StaticResource UiFontFamily}"
+        FontSize="{StaticResource FontSizeBody}"
+        Foreground="{StaticResource TextPrimaryBrush}"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
+        TextOptions.TextFormattingMode="Ideal"
         WindowStartupLocation="CenterOwner">
-    <Grid Margin="18">
+    <Grid Margin="22,20">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -17,66 +23,90 @@
         </Grid.RowDefinitions>
 
         <StackPanel>
-            <TextBlock FontWeight="SemiBold"
+            <TextBlock Style="{StaticResource TitleTextStyle}"
+                       Text="Assign hotkey" />
+            <TextBlock Margin="0,4,0,0"
+                       Style="{StaticResource SecondaryTextStyle}"
                        Text="{Binding TargetName, RelativeSource={RelativeSource AncestorType=Window}}" />
-            <TextBlock Margin="0,5,0,0"
-                       Foreground="#4A5562"
-                       Text="Press one supported key combination in the capture area."
-                       TextWrapping="Wrap" />
         </StackPanel>
 
+        <Grid Grid.Row="1" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="110" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center"
+                       Style="{StaticResource SecondaryTextStyle}"
+                       Text="Current hotkey" />
+            <Border Grid.Column="1"
+                    HorizontalAlignment="Left"
+                    Style="{StaticResource KeyCapChipStyle}">
+                <TextBlock x:Name="CurrentHotkeyTextBlock"
+                           Style="{StaticResource KeyCapTextStyle}"
+                           Text="No hotkey" />
+            </Border>
+        </Grid>
+
         <Border x:Name="CaptureArea"
-                Grid.Row="1"
-                Margin="0,14,0,0"
-                Padding="14"
-                Focusable="True"
-                Background="#F4F7FA"
-                BorderBrush="#557A9B"
+                Grid.Row="2"
+                Margin="0,16,0,0"
+                Padding="16"
+                Background="{StaticResource SurfaceBackgroundBrush}"
+                BorderBrush="{StaticResource AccentBrush}"
                 BorderThickness="2"
-                CornerRadius="5"
-                PreviewKeyDown="CaptureArea_PreviewKeyDown">
+                CornerRadius="{StaticResource SurfaceCornerRadius}"
+                Focusable="True"
+                SnapsToDevicePixels="True"
+                PreviewKeyDown="CaptureArea_PreviewKeyDown"
+                AutomationProperties.Name="Hotkey capture area"
+                AutomationProperties.HelpText="Press one supported key combination. Escape cancels the dialog.">
             <StackPanel>
-                <TextBlock FontWeight="SemiBold"
-                           Text="Hotkey capture" />
+                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                           Margin="0,0,0,6"
+                           Text="PROPOSED HOTKEY" />
                 <TextBlock x:Name="ProposedHotkeyTextBlock"
-                           Margin="0,8,0,0"
-                           FontSize="19"
+                           FontFamily="{StaticResource DisplayFontFamily}"
+                           FontSize="{StaticResource FontSizeDisplay}"
                            FontWeight="SemiBold"
-                           Text="Press a combination…" />
+                           Foreground="{StaticResource TextPrimaryBrush}"
+                           Text="Press a combination…"
+                           TextWrapping="Wrap" />
+                <TextBlock Margin="0,8,0,0"
+                           Style="{StaticResource MutedTextStyle}"
+                           Text="Hold any modifiers, then press a non-modifier key." />
             </StackPanel>
         </Border>
 
         <TextBlock x:Name="ValidationTextBlock"
-                   Grid.Row="2"
-                   Margin="0,12,0,0"
-                   Foreground="DarkRed"
-                   TextWrapping="Wrap" />
+                   Grid.Row="3"
+                   Margin="0,14,0,0"
+                   Style="{StaticResource CaptionTextStyle}"
+                   TextWrapping="Wrap"
+                   AutomationProperties.LiveSetting="Polite" />
 
-        <Grid Grid.Row="3"
-              Margin="0,16,0,0">
+        <Grid Grid.Row="4" Margin="0,16,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <Button MinWidth="105"
-                    Padding="10,6"
+            <Button MinWidth="110"
+                    Content="Clear hotkey"
                     Click="ClearButton_Click"
-                    Content="Clear hotkey" />
-            <StackPanel Grid.Column="2"
-                        Orientation="Horizontal">
-                <Button MinWidth="88"
-                        Padding="10,6"
+                    Style="{StaticResource DangerButtonStyle}"
+                    AutomationProperties.Name="Clear the assigned hotkey" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <Button MinWidth="92"
+                        Content="Cancel"
                         IsCancel="True"
-                        Click="CancelButton_Click"
-                        Content="Cancel" />
+                        Click="CancelButton_Click" />
                 <Button x:Name="SaveButton"
-                        Margin="9,0,0,0"
-                        MinWidth="88"
-                        Padding="10,6"
+                        Margin="10,0,0,0"
+                        MinWidth="92"
+                        Content="Save"
                         IsDefault="True"
                         Click="SaveButton_Click"
-                        Content="Save" />
+                        Style="{StaticResource PrimaryButtonStyle}" />
             </StackPanel>
         </Grid>
     </Grid>

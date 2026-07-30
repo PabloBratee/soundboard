@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Windows.Media;
 using Soundboard.App.Hotkeys;
 using Soundboard.App.Storage;
 using Soundboard.Audio;
@@ -70,8 +69,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
 
     public bool IsFavorite => sound.IsFavorite;
 
-    public string FavoriteGlyph => IsFavorite ? "★" : "☆";
-
     public string FavoriteActionText => IsFavorite
         ? "Remove from favorites"
         : "Add to favorites";
@@ -80,35 +77,14 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         ? "Favorite"
         : "Not favorite";
 
-    public Brush TileBackground => sound.TileAccent switch
-    {
-        SoundTileAccent.Blue => Brushes.AliceBlue,
-        SoundTileAccent.Purple => new SolidColorBrush(
-            Color.FromRgb(246, 239, 255)),
-        SoundTileAccent.Green => new SolidColorBrush(
-            Color.FromRgb(237, 249, 240)),
-        SoundTileAccent.Orange => new SolidColorBrush(
-            Color.FromRgb(255, 246, 232)),
-        SoundTileAccent.Red => new SolidColorBrush(
-            Color.FromRgb(255, 239, 239)),
-        SoundTileAccent.Pink => new SolidColorBrush(
-            Color.FromRgb(255, 239, 248)),
-        SoundTileAccent.Teal => new SolidColorBrush(
-            Color.FromRgb(234, 249, 248)),
-        _ => Brushes.White
-    };
+    /// <summary>
+    /// Controlled accent preset. The view maps this to a theme brush used
+    /// for the tile accent strip and icon surface only, never for the whole
+    /// tile background.
+    /// </summary>
+    public SoundTileAccent TileAccent => sound.TileAccent;
 
-    public Brush TileBorderBrush => sound.TileAccent switch
-    {
-        SoundTileAccent.Blue => Brushes.SteelBlue,
-        SoundTileAccent.Purple => Brushes.MediumPurple,
-        SoundTileAccent.Green => Brushes.SeaGreen,
-        SoundTileAccent.Orange => Brushes.DarkOrange,
-        SoundTileAccent.Red => Brushes.IndianRed,
-        SoundTileAccent.Pink => Brushes.DeepPink,
-        SoundTileAccent.Teal => Brushes.Teal,
-        _ => new SolidColorBrush(Color.FromRgb(203, 210, 218))
-    };
+    public bool HasHotkey => sound.Hotkey is not null;
 
     public string HotkeyDisplayText =>
         sound.Hotkey?.DisplayText ?? "No hotkey";
@@ -155,11 +131,48 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
 
             isPlaying = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(PlayingLabel));
+            OnPropertyChanged(nameof(PlayingStateText));
+            OnPropertyChanged(nameof(TileAutomationName));
         }
     }
 
-    public string PlayingLabel => IsPlaying ? "▶ Playing" : "Play";
+    public string PlayingStateText => IsPlaying ? "Playing" : "Ready";
+
+    /// <summary>
+    /// Full spoken description of the tile. Keeps every state that the
+    /// visual design conveys with icons, colour, or badges available to
+    /// screen readers as text.
+    /// </summary>
+    public string TileAutomationName
+    {
+        get
+        {
+            var parts = new List<string>
+            {
+                DisplayName,
+                DurationText,
+                FormatLabel,
+                CategoryName,
+                FavoriteStateText,
+                PlayingStateText,
+                HasHotkey
+                    ? $"Hotkey {HotkeyDisplayText}, {HotkeyStateText}"
+                    : "No hotkey"
+            };
+
+            if (HasClipEdits)
+            {
+                parts.Add("Trimmed");
+            }
+
+            if (sound.NormalizeLoudness)
+            {
+                parts.Add(NormalizationStateText);
+            }
+
+            return string.Join(", ", parts);
+        }
+    }
 
     public bool CanReorder
     {
@@ -228,12 +241,12 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(Sound));
         OnPropertyChanged(nameof(CategoryName));
         OnPropertyChanged(nameof(IsFavorite));
-        OnPropertyChanged(nameof(FavoriteGlyph));
         OnPropertyChanged(nameof(FavoriteActionText));
         OnPropertyChanged(nameof(FavoriteStateText));
-        OnPropertyChanged(nameof(TileBackground));
-        OnPropertyChanged(nameof(TileBorderBrush));
+        OnPropertyChanged(nameof(TileAccent));
+        OnPropertyChanged(nameof(HasHotkey));
         OnPropertyChanged(nameof(HotkeyDisplayText));
+        OnPropertyChanged(nameof(TileAutomationName));
     }
 
     public void SetLoudnessAnalysis(
@@ -248,6 +261,7 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(HasValidNormalizationAnalysis));
         OnPropertyChanged(nameof(NormalizationStateText));
         OnPropertyChanged(nameof(MatchingLoudnessAnalysis));
+        OnPropertyChanged(nameof(TileAutomationName));
     }
 
     public void SetCategoryName(string replacementCategoryName)
@@ -259,6 +273,7 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
 
         categoryName = replacementCategoryName;
         OnPropertyChanged(nameof(CategoryName));
+        OnPropertyChanged(nameof(TileAutomationName));
     }
 
     public void ApplyHotkeyStatus(HotkeyBindingStatus status)
@@ -281,6 +296,7 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
             _ => "Not assigned"
         };
         HotkeyError = status.Error;
+        OnPropertyChanged(nameof(TileAutomationName));
     }
 
     private void OnPropertyChanged(
@@ -295,6 +311,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
     {
         return duration.TotalHours >= 1
             ? duration.ToString(@"h\:mm\:ss")
-            : duration.ToString(@"m\:ss\.fff");
+            : duration.ToString(@"m\:ss\.f");
     }
 }

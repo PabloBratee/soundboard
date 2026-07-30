@@ -10,6 +10,7 @@ public partial class CategoryNameDialog : Window
         string initialName = "")
     {
         InitializeComponent();
+        WindowTheme.UseDarkTitleBar(this);
         Title = title;
         PromptTextBlock.Text = actionName;
         SaveButton.Content = actionName;

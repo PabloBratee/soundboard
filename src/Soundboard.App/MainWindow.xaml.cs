@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -36,6 +37,14 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim soundTriggerGate = new(1, 1);
     private readonly ICollectionView soundTilesView;
 
+    /// <summary>
+    /// Advanced controls live in a window that is created once and only
+    /// hidden when dismissed. Every control instance and its event wiring
+    /// therefore survives for the whole session, so opening or closing
+    /// Settings can never disturb the audio engine or device selection.
+    /// </summary>
+    private readonly SettingsWindow settingsWindow = new();
+
     private GlobalHotkeyService? hotkeyService;
     private AudioDeviceSnapshot? currentSnapshot;
     private AudioFormatInfo? selectedMicrophoneFormat;
@@ -61,10 +70,142 @@ public partial class MainWindow : Window
     private Guid? draggedSoundId;
     private long formatRequestNumber;
     private long soundTriggerRequestGeneration;
+    private EmptyStateAction emptyStateAction = EmptyStateAction.Import;
+
+    /// <summary>
+    /// Collapses the per-view sound counts in the sidebar when the window
+    /// is too narrow to show them without crowding category names.
+    /// </summary>
+    public static readonly DependencyProperty SidebarCountVisibilityProperty =
+        DependencyProperty.Register(
+            nameof(SidebarCountVisibility),
+            typeof(Visibility),
+            typeof(MainWindow),
+            new PropertyMetadata(Visibility.Visible));
+
+    public Visibility SidebarCountVisibility
+    {
+        get => (Visibility)GetValue(SidebarCountVisibilityProperty);
+        set => SetValue(SidebarCountVisibilityProperty, value);
+    }
+
+    // ---- Advanced controls hosted by the settings window ----------------
+
+    private ComboBox MicrophoneComboBox =>
+        settingsWindow.MicrophoneComboBox;
+
+    private ComboBox VirtualOutputComboBox =>
+        settingsWindow.VirtualOutputComboBox;
+
+    private ComboBox MonitorOutputComboBox =>
+        settingsWindow.MonitorOutputComboBox;
+
+    private Slider MicrophoneVolumeSlider =>
+        settingsWindow.MicrophoneVolumeSlider;
+
+    private Slider MonitorVolumeSlider =>
+        settingsWindow.MonitorVolumeSlider;
+
+    private Slider NormalizationTargetSlider =>
+        settingsWindow.NormalizationTargetSlider;
+
+    private Slider LimiterCeilingSlider =>
+        settingsWindow.LimiterCeilingSlider;
+
+    private CheckBox MuteMicrophoneCheckBox =>
+        settingsWindow.MuteMicrophoneCheckBox;
+
+    private CheckBox MonitorSoundsCheckBox =>
+        settingsWindow.MonitorSoundsCheckBox;
+
+    private CheckBox GlobalHotkeysCheckBox =>
+        settingsWindow.GlobalHotkeysCheckBox;
+
+    private CheckBox SafetyLimiterCheckBox =>
+        settingsWindow.SafetyLimiterCheckBox;
+
+    private ProgressBar MicrophonePeakProgressBar =>
+        settingsWindow.MicrophonePeakProgressBar;
+
+    private ProgressBar MonitorPeakProgressBar =>
+        settingsWindow.MonitorPeakProgressBar;
+
+    private ProgressBar OutputPeakProgressBar =>
+        settingsWindow.OutputPeakProgressBar;
+
+    private Button RefreshDevicesButton =>
+        settingsWindow.RefreshDevicesButton;
+
+    private Button RetryHotkeysButton =>
+        settingsWindow.RetryHotkeysButton;
+
+    private Button ClearStopHotkeyButton =>
+        settingsWindow.ClearStopHotkeyButton;
+
+    private TextBox DiagnosticStatusTextBox =>
+        settingsWindow.DiagnosticStatusTextBox;
+
+    private TextBlock MicrophoneVolumeTextBlock =>
+        settingsWindow.MicrophoneVolumeTextBlock;
+
+    private TextBlock MicrophonePeakTextBlock =>
+        settingsWindow.MicrophonePeakTextBlock;
+
+    private TextBlock MonitorVolumeTextBlock =>
+        settingsWindow.MonitorVolumeTextBlock;
+
+    private TextBlock MonitorPeakTextBlock =>
+        settingsWindow.MonitorPeakTextBlock;
+
+    private TextBlock OutputPeakTextBlock =>
+        settingsWindow.OutputPeakTextBlock;
+
+    private TextBlock DeviceCountsTextBlock =>
+        settingsWindow.DeviceCountsTextBlock;
+
+    private TextBlock VirtualCableStatusTextBlock =>
+        settingsWindow.VirtualCableStatusTextBlock;
+
+    private TextBlock MonitorStatusTextBlock =>
+        settingsWindow.MonitorStatusTextBlock;
+
+    private TextBlock VirtualRoutingTextBlock =>
+        settingsWindow.VirtualRoutingTextBlock;
+
+    private TextBlock MonitorRoutingTextBlock =>
+        settingsWindow.MonitorRoutingTextBlock;
+
+    private TextBlock TargetFormatTextBlock =>
+        settingsWindow.TargetFormatTextBlock;
+
+    private TextBlock NormalizationTargetTextBlock =>
+        settingsWindow.NormalizationTargetTextBlock;
+
+    private TextBlock LimiterCeilingTextBlock =>
+        settingsWindow.LimiterCeilingTextBlock;
+
+    private TextBlock LimiterStatusTextBlock =>
+        settingsWindow.LimiterStatusTextBlock;
+
+    private TextBlock LimiterGainReductionTextBlock =>
+        settingsWindow.LimiterGainReductionTextBlock;
+
+    private TextBlock RegisteredHotkeyCountTextBlock =>
+        settingsWindow.RegisteredHotkeyCountTextBlock;
+
+    private TextBlock StopHotkeyDisplayTextBlock =>
+        settingsWindow.StopHotkeyDisplayTextBlock;
+
+    private TextBlock StopHotkeyStateTextBlock =>
+        settingsWindow.StopHotkeyStateTextBlock;
+
+    private TextBlock HotkeyStatusTextBlock =>
+        settingsWindow.HotkeyStatusTextBlock;
 
     public MainWindow()
     {
         InitializeComponent();
+        WindowTheme.UseDarkTitleBar(this);
 
         soundTilesView = CollectionViewSource.GetDefaultView(soundTiles);
         soundTilesView.Filter = FilterSoundTile;
@@ -107,6 +248,21 @@ public partial class MainWindow : Window
         LimiterCeilingSlider.ValueChanged +=
             LimiterCeilingSlider_ValueChanged;
 
+        // Settings-window commands are wired here rather than in that
+        // window's XAML so all application logic stays in one place.
+        RefreshDevicesButton.Click += RefreshDevicesButton_Click;
+        RetryHotkeysButton.Click += RetryHotkeysButton_Click;
+        settingsWindow.AssignStopHotkeyButton.Click +=
+            AssignStopHotkeyButton_Click;
+        ClearStopHotkeyButton.Click += ClearStopHotkeyButton_Click;
+        settingsWindow.StoragePathsTextBox.Text = string.Join(
+            Environment.NewLine,
+            $"Library:        {soundLibraryStore.RootPath}",
+            $"Waveform cache: {waveformCacheService.WaveformsPath}",
+            $"Analysis cache: {loudnessAnalysisService.AnalysisPath}");
+
+        SizeChanged += MainWindow_SizeChanged;
+
         audioEngine.StateChanged += AudioEngine_StateChanged;
         audioEngine.ErrorOccurred += AudioEngine_ErrorOccurred;
         audioEngine.PeakLevelsChanged += AudioEngine_PeakLevelsChanged;
@@ -116,6 +272,7 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         UpdateLibraryPresentation();
+        UpdateEnginePresentation();
         UpdateControlAvailability();
     }
 
@@ -299,11 +456,84 @@ public partial class MainWindow : Window
                 Left = left;
                 Top = top;
             }
+
+            if (appSettings.WindowMaximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
         }
         finally
         {
             isApplyingSettings = false;
         }
+    }
+
+    private void SettingsButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        // Purely a window operation: no engine, device, or hotkey state
+        // is touched when the settings surface is shown.
+        settingsWindow.ShowOrActivate(this);
+    }
+
+    private void ManageCategoriesButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        UpdateCategoryControlAvailability();
+        OpenAttachedContextMenu(sender);
+    }
+
+    private void SoundOverflowButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        OpenAttachedContextMenu(sender);
+    }
+
+    private static void OpenAttachedContextMenu(object sender)
+    {
+        if (sender is not FrameworkElement { ContextMenu: { } menu } element)
+        {
+            return;
+        }
+
+        menu.PlacementTarget = element;
+        menu.Placement = PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void MainWindow_SizeChanged(
+        object sender,
+        SizeChangedEventArgs eventArgs)
+    {
+        if (!eventArgs.WidthChanged)
+        {
+            return;
+        }
+
+        // Narrow windows keep category names readable by giving up the
+        // sidebar counts and some sidebar width instead.
+        var narrow = eventArgs.NewSize.Width < 1000d;
+        SidebarColumn.Width = new GridLength(narrow ? 158d : 216d);
+        SidebarCountVisibility = narrow
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        SidebarHintTextBlock.Visibility = narrow
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
+
+    private Brush ThemeBrush(string resourceKey)
+    {
+        return TryFindResource(resourceKey) as Brush
+            ?? SystemColors.ControlTextBrush;
+    }
+
+    private string ThemeGlyph(string resourceKey)
+    {
+        return TryFindResource(resourceKey) as string ?? string.Empty;
     }
 
     private async void RefreshDevicesButton_Click(
@@ -619,6 +849,7 @@ public partial class MainWindow : Window
     {
         audioEngine.MicrophoneMuted =
             MuteMicrophoneCheckBox.IsChecked == true;
+        UpdateEnginePresentation();
         UpdateSettingsFromUi();
         ScheduleSettingsSave();
     }
@@ -709,13 +940,19 @@ public partial class MainWindow : Window
                     .TotalMilliseconds:N0} ms lookahead"
             : "Disabled · output is bypassing safety limiting";
         LimiterStatusTextBlock.Foreground = enabled
-            ? Brushes.DarkGreen
-            : Brushes.DarkOrange;
+            ? ThemeBrush("SuccessBrush")
+            : ThemeBrush("WarningBrush");
         LimiterGainReductionTextBlock.Text =
-            $"Virtual: "
+            "Current gain reduction — Virtual: "
             + $"{diagnostics?.VirtualLimiterCurrentGainReductionDb ?? 0f:N1} dB"
             + " · Monitor: "
             + $"{diagnostics?.MonitorLimiterCurrentGainReductionDb ?? 0f:N1} dB";
+        settingsWindow.LimiterMaximumReductionTextBlock.Text =
+            "Maximum gain reduction — Virtual: "
+            + $"{diagnostics?.VirtualLimiterMaximumGainReductionDb ?? 0f:N1} dB"
+            + " · Monitor: "
+            + $"{diagnostics?.MonitorLimiterMaximumGainReductionDb ?? 0f:N1} dB";
+        UpdateStatusChips();
     }
 
     private void ImportSoundsButton_Click(
@@ -1470,7 +1707,7 @@ public partial class MainWindow : Window
             if (currentSoundId == tile.Id)
             {
                 CurrentSoundTextBlock.Text =
-                    $"Current sound: {updated.DisplayName} (playing once)";
+                    $"Playing {updated.DisplayName} · one-shot";
             }
 
             soundTilesView.Refresh();
@@ -2235,17 +2472,89 @@ public partial class MainWindow : Window
         RunOnUiThread(
             () =>
             {
-                EngineStateTextBlock.Text = eventArgs.State.ToString();
-                EngineStateTextBlock.Foreground =
-                    eventArgs.State switch
-                    {
-                        AudioEngineState.Running => Brushes.LightGreen,
-                        AudioEngineState.Faulted => Brushes.OrangeRed,
-                        _ => Brushes.White
-                    };
+                UpdateEnginePresentation();
                 UpdateControlAvailability();
                 RefreshDiagnosticStatus();
             });
+    }
+
+    /// <summary>
+    /// Renders the engine state in the top bar. State is carried by text
+    /// and by a distinct glyph as well as colour, so the indicator stays
+    /// readable without colour perception.
+    /// </summary>
+    private void UpdateEnginePresentation()
+    {
+        var state = audioEngine.State;
+        EngineStateTextBlock.Text = state.ToString();
+        var (glyphKey, brushKey) = state switch
+        {
+            AudioEngineState.Running =>
+                ("GlyphPlay", "SuccessBrush"),
+            AudioEngineState.Starting =>
+                ("GlyphRestart", "WarningBrush"),
+            AudioEngineState.Stopping =>
+                ("GlyphRestart", "WarningBrush"),
+            AudioEngineState.Faulted =>
+                ("GlyphWarning", "ErrorBrush"),
+            _ => ("GlyphStop", "TextMutedBrush")
+        };
+        EngineStateGlyph.Text = ThemeGlyph(glyphKey);
+        EngineStateGlyph.Foreground = ThemeBrush(brushKey);
+        EngineStatePill.BorderBrush = state switch
+        {
+            AudioEngineState.Running => ThemeBrush("SuccessBrush"),
+            AudioEngineState.Faulted => ThemeBrush("ErrorBrush"),
+            _ => ThemeBrush("BorderStrongBrush")
+        };
+
+        var micMuted = MuteMicrophoneCheckBox.IsChecked == true;
+        MicrophoneStateTextBlock.Text = state switch
+        {
+            AudioEngineState.Running when micMuted =>
+                "Microphone muted",
+            AudioEngineState.Running => "Microphone live",
+            AudioEngineState.Faulted => "Microphone released",
+            _ => "Microphone idle"
+        };
+        MicrophoneStateTextBlock.Foreground = micMuted
+            && state == AudioEngineState.Running
+                ? ThemeBrush("WarningBrush")
+                : ThemeBrush("TextMutedBrush");
+    }
+
+    /// <summary>
+    /// Keeps the compact bottom-bar chips current: monitoring state, the
+    /// most recent global-hotkey action, and limiter activity, which only
+    /// appears while the limiter is actually reducing gain.
+    /// </summary>
+    private void UpdateStatusChips()
+    {
+        MonitoringStatusTextBlock.Text =
+            MonitorSoundsCheckBox.IsChecked == true
+                ? audioEngine.State == AudioEngineState.Running
+                    && audioEngine.Diagnostics?.MonitorInitializationStatus
+                        == "Ready"
+                    ? "Monitor: on"
+                    : "Monitor: requested"
+                : "Monitor: off";
+
+        HotkeyActionTextBlock.Text = $"Hotkey: {lastHotkeyAction}";
+
+        var diagnostics = audioEngine.Diagnostics;
+        var reduction = Math.Max(
+            diagnostics?.VirtualLimiterCurrentGainReductionDb ?? 0f,
+            diagnostics?.MonitorLimiterCurrentGainReductionDb ?? 0f);
+        if (appSettings.SafetyLimiterEnabled && reduction >= 0.1f)
+        {
+            LimiterActivityTextBlock.Text =
+                $"Limiting {reduction:N1} dB";
+            LimiterActivityChip.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            LimiterActivityChip.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void AudioEngine_ErrorOccurred(
@@ -2313,7 +2622,7 @@ public partial class MainWindow : Window
                     var playingName = FindTile(eventArgs.SoundId)?.DisplayName
                         ?? eventArgs.SoundId.ToString();
                     CurrentSoundTextBlock.Text =
-                        $"Current sound: {playingName} (playing once)";
+                        $"Playing {playingName} · one-shot";
                 }
                 else if (eventArgs.SessionId == currentSoundSessionId)
                 {
@@ -2322,7 +2631,7 @@ public partial class MainWindow : Window
                         ?? "Sound";
                     currentSoundId = null;
                     SetPlayingTile(null);
-                    CurrentSoundTextBlock.Text = "Current sound: none";
+                    CurrentSoundTextBlock.Text = "No sound playing";
 
                     if (audioEngine.State == AudioEngineState.Running)
                     {
@@ -2476,7 +2785,7 @@ public partial class MainWindow : Window
 
     private void UpdateCategoryControlAvailability()
     {
-        if (RenameCategoryButton is null)
+        if (RenameCategoryMenuItem is null)
         {
             return;
         }
@@ -2493,11 +2802,15 @@ public partial class MainWindow : Window
                 .Select(item => item.itemIndex)
                 .DefaultIfEmpty(-1)
                 .First();
-        RenameCategoryButton.IsEnabled = categoryId is not null;
-        DeleteCategoryButton.IsEnabled = categoryId is not null;
-        MoveCategoryUpButton.IsEnabled = index > 0;
-        MoveCategoryDownButton.IsEnabled =
+        RenameCategoryMenuItem.IsEnabled = categoryId is not null;
+        DeleteCategoryMenuItem.IsEnabled = categoryId is not null;
+        MoveCategoryUpMenuItem.IsEnabled = index > 0;
+        MoveCategoryDownMenuItem.IsEnabled =
             index >= 0 && index < soundCategories.Count - 1;
+        ManageCategoriesButton.IsEnabled = categoryId is not null;
+        ManageCategoriesButton.ToolTip = categoryId is null
+            ? "Select a user category to rename, reorder, or delete it"
+            : "Manage the selected category";
     }
 
     private void FocusAfterLibraryMutation(Guid preferredSoundId)
@@ -2566,6 +2879,7 @@ public partial class MainWindow : Window
             && audioEngine.IsSoundPlaying;
         UpdateCategoryControlAvailability();
         UpdateMonitorStatusForSelection();
+        UpdateStatusChips();
     }
 
     private void UpdateLibraryPresentation()
@@ -2574,29 +2888,14 @@ public partial class MainWindow : Window
             ?? soundTiles.Count;
         var selectedView = SelectedLibraryView
             ?? libraryViews.FirstOrDefault();
-        SoundCountTextBlock.Text =
-            $"{visibleCount} visible · {soundTiles.Count} total";
+        SoundCountTextBlock.Text = visibleCount == soundTiles.Count
+            ? $"{visibleCount} sound{(visibleCount == 1 ? "" : "s")}"
+            : $"{visibleCount} of {soundTiles.Count} sounds";
         SelectedViewTextBlock.Text =
-            $"View: {selectedView?.DisplayName ?? "All Sounds"}";
-        EmptyLibraryTextBlock.Text = soundTiles.Count == 0
-            ? "No sounds yet. Import WAV, MP3, Ogg Opus, or Ogg Vorbis "
-                + "files, or drop them here."
-            : !string.IsNullOrWhiteSpace(SearchTextBox?.Text)
-                ? "No sounds match the current search."
-                : selectedView?.Kind == SoundLibraryViewKind.Favorites
-                    ? "No favorite sounds yet."
-                    : selectedView?.Kind
-                        is SoundLibraryViewKind.Category
-                            or SoundLibraryViewKind.Uncategorized
-                        ? $"No sounds in "
-                            + $"\"{selectedView.DisplayName}\" yet."
-                        : "No sounds are visible in this view.";
-        EmptyLibraryTextBlock.Visibility = visibleCount == 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-        SoundTilesItemsControl.Visibility = visibleCount == 0
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+            selectedView?.DisplayName ?? "All Sounds";
+
+        UpdateSidebarCounts();
+        UpdateEmptyState(selectedView, visibleCount);
 
         var canReorder = CanReorderSounds;
         var availabilityText = ReorderAvailabilityText;
@@ -2605,6 +2904,126 @@ public partial class MainWindow : Window
         {
             tile.CanReorder = canReorder;
             tile.ReorderAvailabilityText = availabilityText;
+        }
+    }
+
+    private void UpdateSidebarCounts()
+    {
+        foreach (var view in libraryViews)
+        {
+            view.SoundCount = soundTiles.Count(
+                tile => SoundLibraryFilter.MatchesView(tile.Sound, view));
+        }
+    }
+
+    /// <summary>
+    /// Chooses the empty-state copy and the single most useful next
+    /// action for the current view. Raw exception text is never shown
+    /// here; failures stay on the status line.
+    /// </summary>
+    private void UpdateEmptyState(
+        LibraryViewItem? selectedView,
+        int visibleCount)
+    {
+        EmptyStatePanel.Visibility = visibleCount == 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SoundGridScrollViewer.Visibility = visibleCount == 0
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        if (visibleCount != 0)
+        {
+            return;
+        }
+
+        var searching = !string.IsNullOrWhiteSpace(SearchTextBox?.Text);
+        if (isImporting)
+        {
+            emptyStateAction = EmptyStateAction.None;
+            EmptyStateGlyph.Text = ThemeGlyph("GlyphRestart");
+            EmptyStateTitleTextBlock.Text = "Importing…";
+            EmptyStateMessageTextBlock.Text =
+                "Files are being inspected and copied into the managed "
+                + "library. This does not modify the originals.";
+        }
+        else if (soundTiles.Count == 0)
+        {
+            emptyStateAction = EmptyStateAction.Import;
+            EmptyStateGlyph.Text = ThemeGlyph("GlyphVolume");
+            EmptyStateTitleTextBlock.Text = "No sounds yet";
+            EmptyStateMessageTextBlock.Text =
+                "Import a few clips to build your soundboard. Sounds are "
+                + "copied into a local library, so the originals stay "
+                + "where they are.";
+        }
+        else if (searching)
+        {
+            emptyStateAction = EmptyStateAction.ClearSearch;
+            EmptyStateGlyph.Text = ThemeGlyph("GlyphSearch");
+            EmptyStateTitleTextBlock.Text = "No matches";
+            EmptyStateMessageTextBlock.Text =
+                $"Nothing in {selectedView?.DisplayName ?? "this view"} "
+                + $"matches “{SearchTextBox!.Text.Trim()}”. "
+                + "Search covers sound names, original filenames, and "
+                + "category names.";
+        }
+        else if (selectedView?.Kind == SoundLibraryViewKind.Favorites)
+        {
+            emptyStateAction = EmptyStateAction.ShowAll;
+            EmptyStateGlyph.Text = ThemeGlyph("GlyphFavoriteOn");
+            EmptyStateTitleTextBlock.Text = "No favorites yet";
+            EmptyStateMessageTextBlock.Text =
+                "Select the star on any tile to keep that sound here for "
+                + "quick access.";
+        }
+        else
+        {
+            emptyStateAction = EmptyStateAction.Import;
+            EmptyStateGlyph.Text = ThemeGlyph("GlyphVolume");
+            EmptyStateTitleTextBlock.Text =
+                $"Nothing in {selectedView?.DisplayName ?? "this view"}";
+            EmptyStateMessageTextBlock.Text =
+                "Import sounds here, or move existing sounds into this "
+                + "category from a tile's Edit sound action.";
+        }
+
+        EmptyStateActionButton.Content = emptyStateAction switch
+        {
+            EmptyStateAction.Import => "Import Sounds",
+            EmptyStateAction.ClearSearch => "Clear search",
+            EmptyStateAction.ShowAll => "Show all sounds",
+            _ => string.Empty
+        };
+        EmptyStateActionButton.Visibility =
+            emptyStateAction == EmptyStateAction.None
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        EmptyStateFormatsTextBlock.Visibility =
+            emptyStateAction == EmptyStateAction.Import
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+    }
+
+    private void EmptyStateActionButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        switch (emptyStateAction)
+        {
+            case EmptyStateAction.Import:
+                ImportSoundsButton_Click(sender, eventArgs);
+                break;
+            case EmptyStateAction.ClearSearch:
+                SearchTextBox.Clear();
+                SearchTextBox.Focus();
+                break;
+            case EmptyStateAction.ShowAll:
+                LibraryViewsListBox.SelectedItem = libraryViews
+                    .FirstOrDefault(
+                        view =>
+                            view.Kind == SoundLibraryViewKind.AllSounds);
+                LibraryViewsListBox.Focus();
+                break;
         }
     }
 
@@ -2708,14 +3127,14 @@ public partial class MainWindow : Window
         {
             VirtualCableStatusTextBlock.Text =
                 "A complete VB-CABLE render/capture pair was not detected.";
-            VirtualCableStatusTextBlock.Foreground = Brushes.DarkRed;
+            VirtualCableStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             return;
         }
 
         VirtualCableStatusTextBlock.Text =
             $"VB-CABLE detected: \"{likelyRender.FriendlyName}\" → "
             + $"\"{likelyCapture.FriendlyName}\".";
-        VirtualCableStatusTextBlock.Foreground = Brushes.DarkGreen;
+        VirtualCableStatusTextBlock.Foreground = ThemeBrush("SuccessBrush");
     }
 
     private void UpdateRoutingStatusForSelection()
@@ -2762,20 +3181,20 @@ public partial class MainWindow : Window
                 MonitorStatusTextBlock.Text =
                     $"Monitoring soundboard audio only through "
                     + $"{runningDiagnostics.MonitorFriendlyName}.";
-                MonitorStatusTextBlock.Foreground = Brushes.DarkGreen;
+                MonitorStatusTextBlock.Foreground = ThemeBrush("SuccessBrush");
             }
             else if (MonitorSoundsCheckBox.IsChecked == true)
             {
                 MonitorStatusTextBlock.Text =
                     runningDiagnostics?.LastMonitorWarningOrError
                     ?? "Monitoring is unavailable for this engine session.";
-                MonitorStatusTextBlock.Foreground = Brushes.DarkRed;
+                MonitorStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             }
             else
             {
                 MonitorStatusTextBlock.Text =
                     "Monitoring is disabled. No physical render device was opened.";
-                MonitorStatusTextBlock.Foreground = Brushes.DimGray;
+                MonitorStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
             }
 
             return;
@@ -2785,7 +3204,7 @@ public partial class MainWindow : Window
         {
             MonitorStatusTextBlock.Text =
                 "Monitoring is disabled. The physical output will not be opened.";
-            MonitorStatusTextBlock.Foreground = Brushes.DimGray;
+            MonitorStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
             return;
         }
 
@@ -2794,7 +3213,7 @@ public partial class MainWindow : Window
             MonitorStatusTextBlock.Text =
                 "Select an active physical headphone or speaker output. The "
                 + "virtual microphone can still start without monitoring.";
-            MonitorStatusTextBlock.Foreground = Brushes.DarkRed;
+            MonitorStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             return;
         }
 
@@ -2807,7 +3226,7 @@ public partial class MainWindow : Window
             MonitorStatusTextBlock.Text =
                 "Monitoring is blocked because the selected endpoint is the "
                 + "virtual cable. Select physical headphones or speakers.";
-            MonitorStatusTextBlock.Foreground = Brushes.DarkRed;
+            MonitorStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             return;
         }
 
@@ -2815,7 +3234,7 @@ public partial class MainWindow : Window
             $"Ready to monitor soundboard audio only through "
             + $"{monitor.FriendlyName}. The engine will not restart "
             + "automatically.";
-        MonitorStatusTextBlock.Foreground = Brushes.DarkGreen;
+        MonitorStatusTextBlock.Foreground = ThemeBrush("SuccessBrush");
     }
 
     private void UpdateRoutingExplanation()
@@ -3125,7 +3544,8 @@ public partial class MainWindow : Window
                 : Width,
             WindowHeight = bounds.Height >= MinHeight
                 ? bounds.Height
-                : Height
+                : Height,
+            WindowMaximized = WindowState == WindowState.Maximized
         };
     }
 
@@ -3202,6 +3622,8 @@ public partial class MainWindow : Window
         shutdownStarted = true;
         isClosing = true;
         IsEnabled = false;
+        settingsWindow.AllowRealClose();
+        settingsWindow.Close();
         settingsSaveDelayCancellation?.Cancel();
         settingsSaveDelayCancellation?.Dispose();
         settingsSaveDelayCancellation = null;
@@ -3427,5 +3849,16 @@ public partial class MainWindow : Window
     {
         Mouse,
         Hotkey
+    }
+
+    /// <summary>
+    /// The single next action offered by the current empty state.
+    /// </summary>
+    private enum EmptyStateAction
+    {
+        None,
+        Import,
+        ClearSearch,
+        ShowAll
     }
 }

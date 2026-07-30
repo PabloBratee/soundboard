@@ -12,6 +12,7 @@ public partial class EditSoundDialog : Window
         ArgumentNullException.ThrowIfNull(sound);
         ArgumentNullException.ThrowIfNull(categories);
         InitializeComponent();
+        WindowTheme.UseDarkTitleBar(this);
 
         CategoryChoices = new[]
         {

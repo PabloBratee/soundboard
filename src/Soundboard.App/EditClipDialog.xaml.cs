@@ -40,6 +40,7 @@ public partial class EditClipDialog : Window
         ArgumentNullException.ThrowIfNull(previewService);
         ArgumentNullException.ThrowIfNull(loudnessAnalysisService);
         InitializeComponent();
+        WindowTheme.UseDarkTitleBar(this);
 
         this.sound = sound;
         this.managedPath = managedPath;
@@ -56,8 +57,8 @@ public partial class EditClipDialog : Window
         OriginalDurationTextBlock.Text = FormatTime(sound.Duration);
         PreviewStatusTextBlock.Text = previewAvailabilityMessage;
         PreviewStatusTextBlock.Foreground = previewEndpoint is null
-            ? Brushes.DarkRed
-            : Brushes.DimGray;
+            ? ThemeBrush("ErrorBrush")
+            : ThemeBrush("TextMutedBrush");
         WaveformEditor.Configure(
             sound.Duration,
             sound.TrimStartMilliseconds,
@@ -105,8 +106,8 @@ public partial class EditClipDialog : Window
                     ? "Loaded waveform from the local derived-data cache."
                     : "Generated waveform from decoded PCM and cached it locally.");
             WaveformStatusTextBlock.Foreground = result.Warning is null
-                ? Brushes.DimGray
-                : Brushes.DarkOrange;
+                ? ThemeBrush("TextMutedBrush")
+                : ThemeBrush("WarningBrush");
         }
         catch (OperationCanceledException)
         {
@@ -119,7 +120,7 @@ public partial class EditClipDialog : Window
                 WaveformStatusTextBlock.Text =
                     "Waveform decoding failed. Playback and clip editing "
                     + $"remain available; reopen to retry. {exception.Message}";
-                WaveformStatusTextBlock.Foreground = Brushes.DarkRed;
+                WaveformStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             }
         }
     }
@@ -157,7 +158,7 @@ public partial class EditClipDialog : Window
             PreviewStatusTextBlock.Text =
                 $"Starting local-only preview on "
                 + $"{previewEndpoint.FriendlyName}…";
-            PreviewStatusTextBlock.Foreground = Brushes.DimGray;
+            PreviewStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
             await previewService.PlayAsync(
                 managedPath,
                 settings,
@@ -169,7 +170,7 @@ public partial class EditClipDialog : Window
             PreviewStatusTextBlock.Text =
                 $"Playing once through {previewEndpoint.FriendlyName}. "
                 + "Preview is not connected to the virtual microphone mixer.";
-            PreviewStatusTextBlock.Foreground = Brushes.DarkGreen;
+            PreviewStatusTextBlock.Foreground = ThemeBrush("SuccessBrush");
         }
         catch (OperationCanceledException)
         {
@@ -179,7 +180,7 @@ public partial class EditClipDialog : Window
         {
             PreviewStatusTextBlock.Text =
                 $"Preview could not start: {exception.Message}";
-            PreviewStatusTextBlock.Foreground = Brushes.DarkRed;
+            PreviewStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
         }
     }
 
@@ -190,7 +191,7 @@ public partial class EditClipDialog : Window
         previewService.Stop();
         PreviewStatusTextBlock.Text =
             "Preview stopped. The main microphone engine was not changed.";
-        PreviewStatusTextBlock.Foreground = Brushes.DimGray;
+        PreviewStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
     }
 
     private void ResetButton_Click(
@@ -202,7 +203,7 @@ public partial class EditClipDialog : Window
         PreviewStatusTextBlock.Text =
             "Reset proposed full-duration playback with no fades. "
             + "Select Save to persist it.";
-        PreviewStatusTextBlock.Foreground = Brushes.DimGray;
+        PreviewStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
     }
 
     private void SaveButton_Click(
@@ -288,7 +289,7 @@ public partial class EditClipDialog : Window
                 if (!closed)
                 {
                     PreviewStatusTextBlock.Text = message;
-                    PreviewStatusTextBlock.Foreground = Brushes.DarkRed;
+                    PreviewStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
                 }
             });
     }
@@ -317,7 +318,7 @@ public partial class EditClipDialog : Window
         {
             LoudnessStatusTextBlock.Text =
                 $"Loudness analysis failed: {exception.Message}";
-            LoudnessStatusTextBlock.Foreground = Brushes.DarkRed;
+            LoudnessStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
         }
     }
 
@@ -341,7 +342,7 @@ public partial class EditClipDialog : Window
             {
                 LoudnessStatusTextBlock.Text =
                     $"Loudness analysis failed: {exception.Message}";
-                LoudnessStatusTextBlock.Foreground = Brushes.DarkRed;
+                LoudnessStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             }
         }
     }
@@ -384,7 +385,7 @@ public partial class EditClipDialog : Window
         AnalyzeLoudnessButton.IsEnabled = false;
         LoudnessStatusTextBlock.Text =
             "Analyzing the effective trimmed and faded clip…";
-        LoudnessStatusTextBlock.Foreground = Brushes.DimGray;
+        LoudnessStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
         try
         {
             var outcome = await loudnessAnalysisService.GetOrAnalyzeAsync(
@@ -440,8 +441,8 @@ public partial class EditClipDialog : Window
                 ? "Not analyzed. Analysis runs only when requested."
                 : "Analysis is stale because trim or fade settings changed.";
             LoudnessStatusTextBlock.Foreground = analysisOutcome is null
-                ? Brushes.DimGray
-                : Brushes.DarkOrange;
+                ? ThemeBrush("TextMutedBrush")
+                : ThemeBrush("WarningBrush");
             MeasuredLoudnessTextBlock.Text = "—";
             SamplePeakTextBlock.Text = "—";
             RequestedGainTextBlock.Text = "—";
@@ -454,7 +455,7 @@ public partial class EditClipDialog : Window
         {
             LoudnessStatusTextBlock.Text =
                 result.InvalidReason ?? "The clip cannot be normalized.";
-            LoudnessStatusTextBlock.Foreground = Brushes.DarkRed;
+            LoudnessStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             MeasuredLoudnessTextBlock.Text = "Unavailable";
             SamplePeakTextBlock.Text =
                 $"{result.MaximumSamplePeakDbfs:N1} dBFS";
@@ -471,8 +472,8 @@ public partial class EditClipDialog : Window
                 ? "Loaded matching analysis from the local cache."
                 : "Analysis completed and was cached locally.");
         LoudnessStatusTextBlock.Foreground = analysisOutcome.Warning is null
-            ? Brushes.DarkGreen
-            : Brushes.DarkOrange;
+            ? ThemeBrush("SuccessBrush")
+            : ThemeBrush("WarningBrush");
         MeasuredLoudnessTextBlock.Text =
             $"{result.IntegratedLoudnessLufs:N1} LUFS";
         SamplePeakTextBlock.Text =
@@ -572,5 +573,11 @@ public partial class EditClipDialog : Window
         return duration.TotalHours >= 1
             ? duration.ToString(@"h\:mm\:ss\.fff")
             : duration.ToString(@"m\:ss\.fff");
+    }
+
+    private Brush ThemeBrush(string resourceKey)
+    {
+        return TryFindResource(resourceKey) as Brush
+            ?? SystemColors.ControlTextBrush;
     }
 }

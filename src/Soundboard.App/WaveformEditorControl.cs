@@ -17,6 +17,19 @@ public sealed class WaveformEditorControl : FrameworkElement
     private ActiveHandle activeHandle = ActiveHandle.Start;
     private bool dragging;
 
+    // Drawing resources are resolved once and frozen. OnRender runs on
+    // every drag tick, so it must not allocate brushes or pens.
+    private Brush? surfaceBrush;
+    private Pen? surfacePen;
+    private Pen? waveformPen;
+    private Brush? excludedBrush;
+    private Brush? fadeBrush;
+    private Brush? activeHandleBrush;
+    private Brush? inactiveHandleBrush;
+    private Pen? handlePen;
+    private Pen? activeHandlePen;
+    private Brush? placeholderBrush;
+
     public WaveformEditorControl()
     {
         Focusable = true;
@@ -124,22 +137,20 @@ public sealed class WaveformEditorControl : FrameworkElement
     protected override void OnRender(DrawingContext drawingContext)
     {
         base.OnRender(drawingContext);
+        EnsureDrawingResources();
         var bounds = new Rect(0, 0, ActualWidth, ActualHeight);
         drawingContext.DrawRoundedRectangle(
-            Brushes.White,
-            new Pen(new SolidColorBrush(Color.FromRgb(187, 196, 207)), 1),
+            surfaceBrush,
+            surfacePen,
             bounds,
-            5,
-            5);
+            8,
+            8);
         if (ActualWidth <= 1 || ActualHeight <= 1)
         {
             return;
         }
 
         var centerY = ActualHeight / 2d;
-        var waveformPen = new Pen(
-            new SolidColorBrush(Color.FromRgb(40, 105, 157)),
-            1);
         if (peaks.Count == 0)
         {
             var text = new FormattedText(
@@ -148,7 +159,7 @@ public sealed class WaveformEditorControl : FrameworkElement
                 FlowDirection.LeftToRight,
                 new Typeface("Segoe UI"),
                 13,
-                Brushes.DimGray,
+                placeholderBrush,
                 VisualTreeHelper.GetDpi(this).PixelsPerDip);
             drawingContext.DrawText(
                 text,
@@ -172,8 +183,6 @@ public sealed class WaveformEditorControl : FrameworkElement
 
         var startX = TimeToX(trimStartMilliseconds);
         var endX = TimeToX(trimEndMilliseconds);
-        var excludedBrush = new SolidColorBrush(
-            Color.FromArgb(145, 65, 71, 79));
         drawingContext.DrawRectangle(
             excludedBrush,
             null,
@@ -187,8 +196,6 @@ public sealed class WaveformEditorControl : FrameworkElement
                 Math.Max(0, ActualWidth - endX),
                 ActualHeight));
 
-        var fadeBrush = new SolidColorBrush(
-            Color.FromArgb(80, 237, 145, 33));
         var fadeInEndX = TimeToX(
             trimStartMilliseconds + fadeInMilliseconds);
         var fadeOutStartX = TimeToX(
@@ -336,15 +343,79 @@ public sealed class WaveformEditorControl : FrameworkElement
             EffectiveDurationMilliseconds - fadeInMilliseconds);
     }
 
+    /// <summary>
+    /// Resolves drawing resources from the application theme once, with
+    /// literal fallbacks for the designer and for any host that does not
+    /// merge the Soundboard dictionaries.
+    /// </summary>
+    private void EnsureDrawingResources()
+    {
+        if (surfaceBrush is not null)
+        {
+            return;
+        }
+
+        surfaceBrush = ThemeBrush("TileBackgroundBrush", 0xFF1B2029);
+        surfacePen = FrozenPen(
+            ThemeBrush("BorderStrongBrush", 0xFF3D4658),
+            1);
+        waveformPen = FrozenPen(
+            ThemeBrush("AccentHoverBrush", 0xFF8172F0),
+            1);
+        excludedBrush = FrozenBrush(0xC00F1116);
+        fadeBrush = FrozenBrush(0x55E3A63F);
+        activeHandleBrush = ThemeBrush("FocusBrush", 0xFFA294FF);
+        inactiveHandleBrush = ThemeBrush("TextPrimaryBrush", 0xFFE8EAF0);
+        handlePen = FrozenPen(
+            ThemeBrush("TextPrimaryBrush", 0xFFE8EAF0),
+            2);
+        activeHandlePen = FrozenPen(
+            ThemeBrush("FocusBrush", 0xFFA294FF),
+            3);
+        placeholderBrush = ThemeBrush("TextMutedBrush", 0xFF7C8698);
+    }
+
+    private Brush ThemeBrush(string resourceKey, uint fallbackArgb)
+    {
+        if (TryFindResource(resourceKey) is Brush found)
+        {
+            if (found.CanFreeze && !found.IsFrozen)
+            {
+                found.Freeze();
+            }
+
+            return found;
+        }
+
+        return FrozenBrush(fallbackArgb);
+    }
+
+    private static Brush FrozenBrush(uint argb)
+    {
+        var brush = new SolidColorBrush(
+            Color.FromArgb(
+                (byte)(argb >> 24),
+                (byte)(argb >> 16),
+                (byte)(argb >> 8),
+                (byte)argb));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static Pen FrozenPen(Brush brush, double thickness)
+    {
+        var pen = new Pen(brush, thickness);
+        pen.Freeze();
+        return pen;
+    }
+
     private void DrawHandle(
         DrawingContext drawingContext,
         double x,
         bool active)
     {
-        var brush = active ? Brushes.DarkOrange : Brushes.White;
-        var pen = new Pen(
-            new SolidColorBrush(Color.FromRgb(20, 77, 116)),
-            active ? 3 : 2);
+        var brush = active ? activeHandleBrush : inactiveHandleBrush;
+        var pen = active ? activeHandlePen : handlePen;
         drawingContext.DrawLine(
             pen,
             new Point(x, 0),

@@ -13,6 +13,15 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
         WriteIndented = true
     };
 
+    /// <summary>
+    /// Smallest restorable window size. Must stay in step with the
+    /// MinWidth and MinHeight declared by MainWindow.
+    /// </summary>
+    public const double MinimumWindowWidth = 880d;
+
+    /// <inheritdoc cref="MinimumWindowWidth" />
+    public const double MinimumWindowHeight = 620d;
+
     private readonly SemaphoreSlim saveGate = new(1, 1);
     private bool disposed;
 
@@ -194,10 +203,10 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
             SafetyLimiterCeilingDbfs = limiterCeiling,
             WindowWidth = ValidateDimension(
                 settings.WindowWidth,
-                minimum: 760d),
+                minimum: MinimumWindowWidth),
             WindowHeight = ValidateDimension(
                 settings.WindowHeight,
-                minimum: 680d)
+                minimum: MinimumWindowHeight)
         };
     }
 

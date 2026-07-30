@@ -31,14 +31,127 @@ audio endpoint for Discord or a game.
   reordering, tile playback, and remove;
 - supports one optional persistent Windows global hotkey per sound plus an
   optional Stop Sound hotkey;
-- detects duplicate content with a SHA-256 hash; and
+- detects duplicate content with a SHA-256 hash;
+- presents a dark, keyboard- and screen-reader-accessible interface built on a
+  centralized WPF design system, with the soundboard on the main window and
+  advanced options in a dedicated Settings window; and
 - exposes engine, endpoint, mixer-format, overflow, playback, error, and
-  library-path diagnostics.
+  library-path diagnostics in Settings → Diagnostics.
 
 The virtual-microphone output refuses physical speakers and headsets. The
 optional monitor output does the inverse: it accepts only active physical
 render endpoints and refuses likely VB-CABLE endpoints, with no override.
 These restrictions keep microphone audio away from physical playback devices.
+
+## Application layout
+
+The main window is built around finding and triggering sounds. Everything
+needed to play a sound is on one screen; device, monitoring, hotkey, loudness,
+and diagnostic options live in a separate Settings window.
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Soundboard │ Engine state │ mic state │ Stop Sound │ ⚙        │
+├───────────────┬──────────────────────────────────────────────┤
+│ Library       │ View name · count │ Search │ Import          │
+│               ├──────────────────────────────────────────────┤
+│ All Sounds  6 │                                              │
+│ Favorites   0 │            Responsive sound tiles            │
+│ Uncategorized │                                              │
+│ <categories>  │                                              │
+├───────────────┴──────────────────────────────────────────────┤
+│ Now playing │ hotkey · monitor · limiter │ sound volume       │
+│ Status line                                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Top bar.** Application name, a compact engine-state pill, the microphone
+state, a prominent **Stop Sound** action, explicit **Start engine** and
+**Stop engine** buttons, and the Settings button. The engine pill shows
+`Stopped`, `Starting`, `Running`, `Stopping`, or `Faulted` as text alongside a
+distinct icon per state, so the state never depends on colour alone. Starting
+and stopping remain explicit user actions.
+
+**Library sidebar.** The fixed **All Sounds**, **Favorites**, and
+**Uncategorized** views followed by user categories, each with a sound count.
+The `+` button creates a category. The `⋯` button opens the management menu
+for the selected category — rename, move earlier, move later, and delete — so
+no destructive action sits on a category row.
+
+**Soundboard header.** The selected view, the visible sound count, search, and
+**Import**. When manual ordering is unavailable, the line beneath explains why.
+
+**Status bar.** The current playing sound, the most recent global-hotkey
+action, monitoring state, limiter gain reduction while the limiter is actually
+working, the soundboard volume, and a one-line status and error area. Detailed
+technical readouts stay in Settings → Diagnostics.
+
+### Settings window
+
+**Settings** opens a separate window with five tabs: **Audio devices**,
+**Monitoring**, **Hotkeys**, **Loudness & safety**, and **Diagnostics**.
+Opening, using, and closing this window never starts, stops, or reconfigures
+the audio engine; every control keeps the same behaviour it had before. The
+window is hidden rather than destroyed when dismissed, so meters and
+registrations continue uninterrupted. `Esc` or **Close** dismisses it.
+
+Diagnostics keeps the endpoint IDs, native and target formats, resampling and
+channel-conversion state, buffer overflows, session IDs, last engine and
+monitor messages, and the library, waveform-cache, and analysis-cache paths in
+selectable, copyable text.
+
+### Sound tiles
+
+Each tile shows an accent strip, a play icon, the sound name, duration and
+format, its hotkey as a key-cap chip, and state badges for `Playing`,
+`Trimmed`, and normalization.
+
+- Activating the main tile surface with the mouse, `Enter`, or `Space` plays
+  the sound from its edited start, or restarts it if it is already playing.
+- The drag handle reorders without ever triggering playback.
+- The star toggles Favorite.
+- The `⋯` menu holds Edit sound, Edit clip, Assign hotkey, Move earlier, Move
+  later, and Remove.
+
+Secondary controls sit above the play surface as siblings rather than nested
+inside it, so a click on one can never fall through to playback.
+
+A playing tile is marked several ways at once: a `Playing` badge, a distinct
+border colour and weight, a tinted background, and a play icon that changes to
+a restart icon. The state is also part of the tile's accessible name.
+
+Tile accents keep the existing controlled Default, Blue, Purple, Green,
+Orange, Red, Pink, and Teal presets. An accent colours the tile's top strip and
+icon surface only; it never recolours the whole tile, so text contrast stays
+constant.
+
+### Keyboard and accessibility
+
+- Tab order runs top bar → sidebar → search → import → tiles, and within a
+  tile: play surface → drag handle → favorite → actions menu.
+- Sound tiles are keyboard-activatable and focus indicators stay visible
+  against every accent preset.
+- A tile's accessible name includes its name, duration, format, category,
+  favorite state, playing state, hotkey and hotkey availability, trimmed
+  state, and normalization state, so no state is conveyed by colour, shape, or
+  icon alone.
+- Sidebar entries announce their sound count.
+- Drag-to-reorder always has Move earlier and Move later equivalents.
+- The now-playing and status lines are polite live regions; the error line is
+  assertive.
+- Icon-only buttons carry both a tooltip and an accessible name.
+- `Esc` closes dialogs and the Settings window; `Enter` activates the primary
+  action of a dialog.
+
+### Window behaviour
+
+The window opens at 1180×820, will not go below 880×620, and restores its
+saved size, position, and maximized state when they are still usable on the
+current desktop. The sound grid reflows its column count with the window. Below
+about 1000 px the sidebar narrows and drops its counts so category names stay
+readable; the play control, name, duration, and state stay visible at every
+supported size. Soundboard uses standard Windows chrome — no custom title bar,
+tray icon, always-on-top mode, or startup integration.
 
 ## Technology
 
@@ -212,18 +325,20 @@ dotnet run --project .\src\Soundboard.App\Soundboard.App.csproj --configuration 
 
 ## Start the audio engine
 
-1. Select the physical microphone.
-2. Select the standard VB-CABLE virtual render endpoint, normally
-   `CABLE Input (VB-Audio Virtual Cable)`.
-3. Optionally enable **Monitor sounds through headphones** and select a
-   physical monitor output, such as
+1. Open **Settings → Audio devices** and select the physical microphone.
+2. In the same tab, select the standard VB-CABLE virtual render endpoint,
+   normally `CABLE Input (VB-Audio Virtual Cable)`.
+3. Optionally open **Settings → Monitoring**, enable **Monitor sounds through
+   headphones**, and select a physical monitor output, such as
    `Speakers (2- Razer BlackShark V2 Pro)`.
-4. Select **Start audio engine**.
-5. Speak and verify the microphone and final-output meters move. The monitor
-   meter must remain idle because microphone audio is never monitored.
-6. Import sounds and select a sound tile.
-7. Select **Stop audio engine** before changing devices, changing the monitor
-   enable state, or refreshing devices.
+4. Close Settings and select **Start engine** in the top bar.
+5. Speak and verify the microphone meter in Settings → Audio devices and the
+   final-output meter in Settings → Diagnostics move. The monitor meter must
+   remain idle because microphone audio is never monitored.
+6. Import sounds and activate a sound tile.
+7. Select **Stop engine** before changing devices, changing the monitor enable
+   state, or refreshing devices. Device selectors are disabled while the
+   engine is running.
 
 Soundboard restores available saved endpoints. If the saved microphone is
 unavailable, it uses the current default microphone. If the saved output is
@@ -309,13 +424,14 @@ The left library panel contains three fixed, non-deletable views:
 - **Uncategorized** shows sounds with no category assignment.
 
 User categories are a single flat level below those built-in views. Category
-names are trimmed, limited to 60 characters, and unique
-case-insensitively. Use **Create category**, **Rename**, and **Delete** in the
-library panel. The **Move up** and **Move down** buttons reorder user
-categories; built-in views remain fixed. Renaming a category retains its
-position. Deleting asks for confirmation, moves its sounds to Uncategorized
-without changing their relative order, and never deletes their managed audio
-files.
+names are trimmed, limited to 60 characters, and unique case-insensitively.
+The `+` button in the sidebar header creates a category. The `⋯` button next
+to it opens the management menu for the currently selected category, with
+**Rename category**, **Move category earlier**, **Move category later**, and
+**Delete category**; it is disabled while a built-in view is selected.
+Built-in views remain fixed. Renaming a category retains its position.
+Deleting asks for confirmation, moves its sounds to Uncategorized without
+changing their relative order, and never deletes their managed audio files.
 
 Each tile has a star control with an accessible **Add to favorites** or
 **Remove from favorites** name. Favorite changes persist immediately and the
@@ -323,23 +439,29 @@ Favorites view refreshes immediately. A filtered-out sound retains its global
 hotkey and remains playable through that hotkey while the app and audio engine
 are running.
 
-Use **Edit** to change a sound's trimmed display name, category, favorite
-state, and one of the controlled Default, Blue, Purple, Green, Orange, Red,
-Pink, or Teal accent presets in one atomic metadata update. The dialog also
-shows the original filename, duration, concise detected format (`WAV`, `MP3`,
-`OGG · Opus`, or `OGG · Vorbis`), and assigned hotkey without editing them.
-Tiles show the same format label. Hotkeys remain in the dedicated hotkey
-dialog. Editing does not rename the managed audio file and does not stop a
-playing sound; its stable sound ID and visible Playing state remain attached
-to the same tile.
+Use **Edit sound…** in a tile's `⋯` menu to change its trimmed display name,
+category, favorite state, and one of the controlled Default, Blue, Purple,
+Green, Orange, Red, Pink, or Teal accent presets in one atomic metadata
+update. The dialog also shows the original filename, duration, concise
+detected format (`WAV`, `MP3`, `OGG · Opus`, or `OGG · Vorbis`), and assigned
+hotkey without editing them. Tiles show the same format label. Hotkeys remain
+in the dedicated hotkey dialog. Editing does not rename the managed audio file
+and does not stop a playing sound; its stable sound ID and visible Playing
+state remain attached to the same tile.
+
+When a view has nothing to show, the grid explains why and offers the single
+most useful next action: **Import Sounds** for an empty library or category,
+**Clear search** when a search matches nothing, and **Show all sounds** when
+Favorites is empty. Import progress replaces the same area. Raw exception text
+never appears in these states; failures stay on the status line.
 
 ### Edit a clip non-destructively
 
-Use **Edit clip** on a sound tile to view the entire original decoded
+Use **Edit clip…** in a tile's `⋯` menu to view the entire original decoded
 waveform, original filename, detected format, original duration, proposed trim
 start and end, effective playable duration, and fade-in and fade-out lengths.
-The blue waveform always represents the complete original source. Excluded
-audio is dimmed, orange regions show fades, and the two vertical handles select
+The waveform always represents the complete original source. Excluded audio
+is dimmed, amber regions show fades, and the two vertical handles select
 the playable region.
 
 Drag either handle, or use the accessible adjustment buttons. In the waveform,
@@ -620,6 +742,12 @@ service the selected endpoints reliably at that time.
   detection, automatic trimming, destructive editing, edited-file export, or
   destructive normalization;
 - waveform preview does not currently draw a live playback cursor;
+- the sound grid is not UI-virtualized, because WPF has no built-in
+  virtualizing wrap panel that preserves tile drag-and-drop; very large
+  libraries therefore build every tile up front;
+- the interface is dark only; there is no light theme or theme switch;
+- Soundboard asks Windows for the dark native title bar, but some Windows
+  builds ignore the request and keep the light caption;
 - sample-peak limiting only; no oversampled true-peak limiting, compressor,
   multiband dynamics, gate, equalizer, automatic microphone gain, noise
   reduction, pitch shifting, or time stretching;

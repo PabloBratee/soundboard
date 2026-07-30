@@ -1,0 +1,21 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:system="clr-namespace:System;assembly=System.Runtime">
+
+    <!--
+        Segoe Fluent Icons code points that code-behind needs. Keeping them
+        here as XML character references means no private-use characters
+        ever appear in a C# source file.
+    -->
+    <system:String x:Key="GlyphPlay">&#xE768;</system:String>
+    <system:String x:Key="GlyphRestart">&#xE72C;</system:String>
+    <system:String x:Key="GlyphStop">&#xE71A;</system:String>
+    <system:String x:Key="GlyphWarning">&#xE7BA;</system:String>
+    <system:String x:Key="GlyphMicrophone">&#xE720;</system:String>
+    <system:String x:Key="GlyphMicrophoneMuted">&#xE74F;</system:String>
+    <system:String x:Key="GlyphSearch">&#xE721;</system:String>
+    <system:String x:Key="GlyphVolume">&#xE767;</system:String>
+    <system:String x:Key="GlyphFavoriteOff">&#xE734;</system:String>
+    <system:String x:Key="GlyphFavoriteOn">&#xE735;</system:String>
+
+</ResourceDictionary>

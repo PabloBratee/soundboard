@@ -2,374 +2,388 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Soundboard"
-        Width="1020"
-        Height="920"
-        MinWidth="760"
-        MinHeight="680"
+        Width="1180"
+        Height="820"
+        MinWidth="880"
+        MinHeight="620"
+        Background="{StaticResource AppBackgroundBrush}"
+        FontFamily="{StaticResource UiFontFamily}"
+        FontSize="{StaticResource FontSizeBody}"
+        Foreground="{StaticResource TextPrimaryBrush}"
+        TextOptions.TextFormattingMode="Ideal"
         WindowStartupLocation="CenterScreen">
-    <Grid Background="#F4F6F8">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+
+        <!-- Search field container; mirrors TextBox focus state. -->
+        <Style x:Key="SearchContainerStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SurfaceRaisedBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{StaticResource ControlCornerRadius}" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsKeyboardFocusWithin, ElementName=SearchTextBox}"
+                             Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource FocusBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Error line hides itself when the message is cleared. -->
+        <Style x:Key="ErrorLineStyle"
+               TargetType="TextBlock"
+               BasedOn="{StaticResource CaptionTextStyle}">
+            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+            <Setter Property="Visibility" Value="Visible" />
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Tile accent strip. The only place a preset colour is applied. -->
+        <Style x:Key="TileAccentStripStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource TileAccentDefaultBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Blue">
+                    <Setter Property="Background" Value="{StaticResource TileAccentBlueBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Purple">
+                    <Setter Property="Background" Value="{StaticResource TileAccentPurpleBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Green">
+                    <Setter Property="Background" Value="{StaticResource TileAccentGreenBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Orange">
+                    <Setter Property="Background" Value="{StaticResource TileAccentOrangeBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Red">
+                    <Setter Property="Background" Value="{StaticResource TileAccentRedBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Pink">
+                    <Setter Property="Background" Value="{StaticResource TileAccentPinkBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding TileAccent}" Value="Teal">
+                    <Setter Property="Background" Value="{StaticResource TileAccentTealBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Whole-tile primary surface. Chrome-free; the tile Border draws it. -->
+        <Style x:Key="TileSurfaceButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="FocusVisualStyle" Value="{StaticResource AppFocusVisualStyle}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Stretch"
+                                              VerticalAlignment="Stretch" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TileBadgeTextStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
+            <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="TextWrapping" Value="NoWrap" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
+        <Style x:Key="StatusChipStyle" TargetType="Border">
+            <Setter Property="Margin" Value="0,0,10,0" />
+            <Setter Property="Padding" Value="9,3" />
+            <Setter Property="Background" Value="{StaticResource SurfaceBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="{StaticResource PillCornerRadius}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Border Padding="22,16"
-                Background="#202936">
+        <!-- ==================== Top bar ==================== -->
+        <Border Padding="18,10"
+                Background="{StaticResource SidebarBackgroundBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,0,0,1">
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel>
-                    <TextBlock FontSize="27"
-                               FontWeight="SemiBold"
-                               Foreground="White"
+
+                <StackPanel VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <Border Width="30"
+                            Height="30"
+                            Background="{StaticResource AccentBrush}"
+                            CornerRadius="8">
+                        <TextBlock FontFamily="{StaticResource IconFontFamily}"
+                                   FontSize="15"
+                                   Foreground="{StaticResource TextOnAccentBrush}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Text="&#xE767;" />
+                    </Border>
+                    <TextBlock Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource TitleTextStyle}"
                                Text="Soundboard" />
-                    <TextBlock Margin="0,4,0,0"
-                               Foreground="#C8D2DF"
-                               Text="One-shot sounds to Discord, with optional sound-only headphone monitoring" />
                 </StackPanel>
+
                 <StackPanel Grid.Column="1"
+                            Margin="22,0,0,0"
                             VerticalAlignment="Center"
                             Orientation="Horizontal">
-                    <TextBlock VerticalAlignment="Center"
-                               Foreground="#C8D2DF"
-                               Text="Engine: " />
-                    <TextBlock x:Name="EngineStateTextBlock"
+                    <Border x:Name="EngineStatePill"
+                            Padding="10,4"
+                            Background="{StaticResource SurfaceBackgroundBrush}"
+                            BorderBrush="{StaticResource BorderStrongBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource PillCornerRadius}"
+                            SnapsToDevicePixels="True">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="EngineStateGlyph"
+                                       Margin="0,0,7,0"
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource IconFontFamily}"
+                                       FontSize="12"
+                                       Foreground="{StaticResource TextMutedBrush}"
+                                       Text="&#xE71A;" />
+                            <TextBlock Margin="0,0,5,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CaptionTextStyle}"
+                                       Text="Engine" />
+                            <TextBlock x:Name="EngineStateTextBlock"
+                                       VerticalAlignment="Center"
+                                       FontSize="{StaticResource FontSizeCaption}"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                       Text="Stopped" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="MicrophoneStateTextBlock"
+                               Margin="12,0,0,0"
                                VerticalAlignment="Center"
-                               FontWeight="Bold"
-                               Foreground="White"
-                               Text="Stopped" />
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="Microphone idle" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="3"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <Button x:Name="StopSoundButton"
+                            MinWidth="118"
+                            Click="StopSoundButton_Click"
+                            Style="{StaticResource PrimaryButtonStyle}"
+                            ToolTip="Stop the sound that is currently playing. The microphone keeps running."
+                            AutomationProperties.Name="Stop sound">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Margin="0,0,7,0"
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource IconFontFamily}"
+                                       FontSize="12"
+                                       Text="&#xE71A;" />
+                            <TextBlock VerticalAlignment="Center"
+                                       FontWeight="SemiBold"
+                                       Text="Stop Sound" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Width="1"
+                            Margin="12,4"
+                            Background="{StaticResource BorderBrush}" />
+
+                    <Button x:Name="StartEngineButton"
+                            Click="StartEngineButton_Click"
+                            Content="Start engine"
+                            ToolTip="Open the microphone and virtual output. Soundboard never starts audio routing on its own."
+                            AutomationProperties.Name="Start audio engine" />
+                    <Button x:Name="StopEngineButton"
+                            Margin="8,0,0,0"
+                            Click="StopEngineButton_Click"
+                            Content="Stop engine"
+                            ToolTip="Release the microphone and all audio devices."
+                            AutomationProperties.Name="Stop audio engine" />
+
+                    <Button x:Name="SettingsButton"
+                            Margin="12,0,0,0"
+                            Click="SettingsButton_Click"
+                            Content="&#xE713;"
+                            Style="{StaticResource IconButtonStyle}"
+                            ToolTip="Settings — devices, monitoring, hotkeys, loudness, diagnostics"
+                            AutomationProperties.Name="Open settings" />
                 </StackPanel>
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="1"
-                      VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="20">
-                <Expander Margin="0,0,0,14"
-                          IsExpanded="True"
-                          Header="Audio routing and controls">
-                    <Border Margin="0,8,0,0"
-                            Padding="14"
-                            Background="White"
-                            BorderBrush="#D6DBE1"
-                            BorderThickness="1"
-                            CornerRadius="6">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="20" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
+        <!-- ==================== Body ==================== -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="SidebarColumn" Width="216" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-                            <StackPanel>
-                                <TextBlock FontWeight="SemiBold"
-                                           Text="Microphone" />
-                                <ComboBox x:Name="MicrophoneComboBox"
-                                          Margin="0,6,0,0"
-                                          MinHeight="32"
-                                          DisplayMemberPath="FriendlyName"
-                                          IsTextSearchEnabled="True" />
-
-                                <Grid Margin="0,13,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="80" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="55" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock VerticalAlignment="Center"
-                                               Text="Volume" />
-                                    <Slider x:Name="MicrophoneVolumeSlider"
-                                            Grid.Column="1"
-                                            Minimum="0"
-                                            Maximum="200"
-                                            Value="100"
-                                            TickFrequency="10" />
-                                    <TextBlock x:Name="MicrophoneVolumeTextBlock"
-                                               Grid.Column="2"
-                                               Margin="8,0,0,0"
-                                               VerticalAlignment="Center"
-                                               Text="100%" />
-                                </Grid>
-                                <Grid Margin="0,10,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="135" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="55" />
-                                    </Grid.ColumnDefinitions>
-                                    <CheckBox x:Name="MuteMicrophoneCheckBox"
-                                              VerticalAlignment="Center"
-                                              Content="Mute microphone" />
-                                    <ProgressBar x:Name="MicrophonePeakProgressBar"
-                                                 Grid.Column="1"
-                                                 Height="15"
-                                                 Maximum="1" />
-                                    <TextBlock x:Name="MicrophonePeakTextBlock"
-                                               Grid.Column="2"
-                                               Margin="8,0,0,0"
-                                               VerticalAlignment="Center"
-                                               Text="0%" />
-                                </Grid>
-                            </StackPanel>
-
-                            <StackPanel Grid.Column="2">
-                                <TextBlock FontWeight="SemiBold"
-                                           Text="Virtual output" />
-                                <ComboBox x:Name="VirtualOutputComboBox"
-                                          Margin="0,6,0,0"
-                                          MinHeight="32"
-                                          DisplayMemberPath="FriendlyName"
-                                          IsTextSearchEnabled="True" />
-
-                                <StackPanel Margin="0,13,0,0"
-                                            Orientation="Horizontal">
-                                    <Button x:Name="RefreshDevicesButton"
-                                            Padding="11,6"
-                                            Click="RefreshDevicesButton_Click"
-                                            Content="Refresh devices" />
-                                    <TextBlock x:Name="DeviceCountsTextBlock"
-                                               Margin="12,0,0,0"
-                                               VerticalAlignment="Center"
-                                               Foreground="#4A5562"
-                                               Text="Waiting for discovery…" />
-                                </StackPanel>
-
-                                <StackPanel Margin="0,12,0,0"
-                                            Orientation="Horizontal">
-                                    <Button x:Name="StartEngineButton"
-                                            MinWidth="140"
-                                            Padding="11,7"
-                                            Click="StartEngineButton_Click"
-                                            Content="Start audio engine" />
-                                    <Button x:Name="StopEngineButton"
-                                            Margin="10,0,0,0"
-                                            MinWidth="140"
-                                            Padding="11,7"
-                                            Click="StopEngineButton_Click"
-                                            Content="Stop audio engine" />
-                                </StackPanel>
-
-                                <TextBlock x:Name="VirtualCableStatusTextBlock"
-                                           Margin="0,11,0,0"
-                                           Foreground="#8A5A00"
-                                           Text="Checking for VB-CABLE endpoints…"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-                        </Grid>
-                    </Border>
-                </Expander>
-
-                <Border Margin="0,0,0,14"
-                        Padding="14"
-                        Background="White"
-                        BorderBrush="#D6DBE1"
-                        BorderThickness="1"
-                        CornerRadius="6">
-                    <Grid>
+            <!-- Library sidebar -->
+            <Border Background="{StaticResource SidebarBackgroundBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,1,0">
+                <DockPanel Margin="10,14,10,10">
+                    <Grid DockPanel.Dock="Top" Margin="4,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="24" />
-                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-
-                        <StackPanel>
-                            <TextBlock FontSize="16"
-                                       FontWeight="SemiBold"
-                                       Text="Local sound monitoring" />
-                            <CheckBox x:Name="MonitorSoundsCheckBox"
-                                      Margin="0,10,0,0"
-                                      Content="Monitor sounds through headphones" />
-                            <TextBlock Margin="0,12,0,0"
-                                       FontWeight="SemiBold"
-                                       Text="Physical monitor output" />
-                            <ComboBox x:Name="MonitorOutputComboBox"
-                                      Margin="0,6,0,0"
-                                      MinHeight="32"
-                                      DisplayMemberPath="FriendlyName"
-                                      IsTextSearchEnabled="True" />
-
-                            <Grid Margin="0,13,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="105" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="55" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           Text="Monitor volume" />
-                                <Slider x:Name="MonitorVolumeSlider"
-                                        Grid.Column="1"
-                                        Minimum="0"
-                                        Maximum="200"
-                                        Value="100"
-                                        TickFrequency="10" />
-                                <TextBlock x:Name="MonitorVolumeTextBlock"
-                                           Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           Text="100%" />
-                            </Grid>
-
-                            <Grid Margin="0,10,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="105" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="55" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           Text="Monitor peak" />
-                                <ProgressBar x:Name="MonitorPeakProgressBar"
-                                             Grid.Column="1"
-                                             Height="15"
-                                             Maximum="1" />
-                                <TextBlock x:Name="MonitorPeakTextBlock"
-                                           Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           Text="0%" />
-                            </Grid>
-
-                            <TextBlock x:Name="MonitorStatusTextBlock"
-                                       Margin="0,11,0,0"
-                                       Foreground="#4A5562"
-                                       Text="Monitoring is disabled."
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-
-                        <StackPanel Grid.Column="2">
-                            <TextBlock FontSize="16"
-                                       FontWeight="SemiBold"
-                                       Text="Routing" />
-                            <TextBlock Margin="0,10,0,0"
-                                       FontWeight="SemiBold"
-                                       Text="To Discord:" />
-                            <TextBlock x:Name="VirtualRoutingTextBlock"
-                                       Margin="0,3,0,0"
-                                       Text="Microphone + Soundboard → CABLE Input"
-                                       TextWrapping="Wrap" />
-                            <TextBlock Margin="0,14,0,0"
-                                       FontWeight="SemiBold"
-                                       Text="To your headphones:" />
-                            <TextBlock x:Name="MonitorRoutingTextBlock"
-                                       Margin="0,3,0,0"
-                                       Text="Soundboard only → select a physical output"
-                                       TextWrapping="Wrap" />
-
-                            <Border Margin="0,18,0,0"
-                                    Padding="10"
-                                    Background="#EAF4FC"
-                                    BorderBrush="#8CB9D9"
-                                    BorderThickness="1"
-                                    CornerRadius="4">
-                                <TextBlock FontWeight="SemiBold"
-                                           Foreground="#174D70"
-                                           Text="Your microphone is never monitored through this app."
-                                           TextWrapping="Wrap" />
-                            </Border>
-                        </StackPanel>
+                        <TextBlock VerticalAlignment="Center"
+                                   Style="{StaticResource SectionHeadingTextStyle}"
+                                   Margin="0"
+                                   Text="LIBRARY" />
+                        <Button x:Name="CreateCategoryButton"
+                                Grid.Column="1"
+                                Width="28"
+                                Height="28"
+                                Click="CreateCategoryButton_Click"
+                                Content="&#xE710;"
+                                Style="{StaticResource IconButtonStyle}"
+                                ToolTip="Create category"
+                                AutomationProperties.Name="Create category" />
+                        <Button x:Name="ManageCategoriesButton"
+                                Grid.Column="2"
+                                Width="28"
+                                Height="28"
+                                Click="ManageCategoriesButton_Click"
+                                Content="&#xE712;"
+                                Style="{StaticResource IconButtonStyle}"
+                                ToolTip="Manage the selected category"
+                                AutomationProperties.Name="Manage selected category">
+                            <Button.ContextMenu>
+                                <ContextMenu x:Name="CategoryActionsMenu">
+                                    <MenuItem x:Name="RenameCategoryMenuItem"
+                                              Header="Rename category"
+                                              Click="RenameCategoryButton_Click"
+                                              AutomationProperties.Name="Rename selected category" />
+                                    <MenuItem x:Name="MoveCategoryUpMenuItem"
+                                              Header="Move category earlier"
+                                              Click="MoveCategoryUpButton_Click"
+                                              AutomationProperties.Name="Move selected category earlier" />
+                                    <MenuItem x:Name="MoveCategoryDownMenuItem"
+                                              Header="Move category later"
+                                              Click="MoveCategoryDownButton_Click"
+                                              AutomationProperties.Name="Move selected category later" />
+                                    <Separator />
+                                    <MenuItem x:Name="DeleteCategoryMenuItem"
+                                              Header="Delete category…"
+                                              Click="DeleteCategoryButton_Click"
+                                              AutomationProperties.Name="Delete selected category" />
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
                     </Grid>
-                </Border>
 
-                <Border Margin="0,0,0,14"
-                        Padding="14"
-                        Background="White"
-                        BorderBrush="#D6DBE1"
-                        BorderThickness="1"
-                        CornerRadius="6">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="24" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock FontSize="16"
-                                       FontWeight="SemiBold"
-                                       Text="Loudness and safety" />
-                            <TextBlock Margin="0,6,0,0"
-                                       Foreground="#4A5562"
-                                       Text="Normalization adjusts individual sound effects toward a consistent perceived loudness."
-                                       TextWrapping="Wrap" />
-                            <TextBlock Margin="0,10,0,0"
-                                       FontWeight="SemiBold"
-                                       Text="Global normalization target" />
-                            <Grid Margin="0,6,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="78" />
-                                </Grid.ColumnDefinitions>
-                                <Slider x:Name="NormalizationTargetSlider"
-                                        Minimum="-24"
-                                        Maximum="-10"
-                                        Value="-16"
-                                        TickFrequency="0.5"
-                                        IsSnapToTickEnabled="True" />
-                                <TextBlock x:Name="NormalizationTargetTextBlock"
-                                           Grid.Column="1"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           Text="-16.0 LUFS" />
-                            </Grid>
-                            <TextBlock Margin="0,7,0,0"
-                                       Foreground="#4A5562"
-                                       Text="Normalization affects sound audio only; microphone volume is unchanged."
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock FontSize="16"
-                                       FontWeight="SemiBold"
-                                       Text="Sample-peak limiter" />
-                            <TextBlock Margin="0,6,0,0"
-                                       Foreground="#4A5562"
-                                       Text="The safety limiter prevents excessive peaks in the final output mix."
-                                       TextWrapping="Wrap" />
-                            <CheckBox x:Name="SafetyLimiterCheckBox"
-                                      Margin="0,10,0,0"
-                                      Content="Enable safety limiter" />
-                            <Grid Margin="0,9,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="110" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="75" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           Text="Ceiling" />
-                                <Slider x:Name="LimiterCeilingSlider"
-                                        Grid.Column="1"
-                                        Minimum="-6"
-                                        Maximum="-0.1"
-                                        Value="-1"
-                                        TickFrequency="0.1"
-                                        IsSnapToTickEnabled="True" />
-                                <TextBlock x:Name="LimiterCeilingTextBlock"
-                                           Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           VerticalAlignment="Center"
-                                           Text="-1.0 dBFS" />
-                            </Grid>
-                            <TextBlock x:Name="LimiterStatusTextBlock"
-                                       Margin="0,8,0,0"
-                                       Foreground="#4A5562"
-                                       Text="Enabled · 5 ms lookahead" />
-                            <TextBlock x:Name="LimiterGainReductionTextBlock"
-                                       Margin="0,4,0,0"
-                                       Foreground="#4A5562"
-                                       Text="Virtual: 0.0 dB · Monitor: 0.0 dB" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
+                    <TextBlock x:Name="SidebarHintTextBlock"
+                               DockPanel.Dock="Bottom"
+                               Margin="4,10,4,0"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="Built-in views come first, then your categories." />
 
-                <Border Margin="0,0,0,14"
-                        Padding="14"
-                        Background="White"
-                        BorderBrush="#D6DBE1"
-                        BorderThickness="1"
-                        CornerRadius="6">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ListBox x:Name="LibraryViewsListBox"
+                                 SelectionChanged="LibraryViewsListBox_SelectionChanged"
+                                 AutomationProperties.Name="Library views and categories">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem"
+                                       BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                    <Setter Property="AutomationProperties.Name"
+                                            Value="{Binding AutomationName}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Height="32">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="26" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="ViewGlyph"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"
+                                                   FontFamily="{StaticResource IconFontFamily}"
+                                                   FontSize="13"
+                                                   Text="&#xE8B7;" />
+                                        <TextBlock Grid.Column="1"
+                                                   Margin="8,0,6,0"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding DisplayName}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding DisplayName}" />
+                                        <Border Grid.Column="2"
+                                                Margin="0,0,6,0"
+                                                Padding="7,1"
+                                                VerticalAlignment="Center"
+                                                Background="{StaticResource SurfaceRaisedBackgroundBrush}"
+                                                CornerRadius="{StaticResource PillCornerRadius}"
+                                                Visibility="{Binding SidebarCountVisibility, RelativeSource={RelativeSource AncestorType=Window}}">
+                                            <TextBlock FontSize="{StaticResource FontSizeMicro}"
+                                                       Foreground="{StaticResource TextMutedBrush}"
+                                                       Text="{Binding SoundCountText}" />
+                                        </Border>
+                                    </Grid>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding Kind}" Value="AllSounds">
+                                            <Setter TargetName="ViewGlyph" Property="Text" Value="&#xE767;" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Favorites">
+                                            <Setter TargetName="ViewGlyph" Property="Text" Value="&#xE735;" />
+                                            <Setter TargetName="ViewGlyph" Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Kind}" Value="Uncategorized">
+                                            <Setter TargetName="ViewGlyph" Property="Text" Value="&#xE7C3;" />
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <!-- Soundboard -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Padding="18,14,18,12"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,0,0,1">
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
@@ -378,510 +392,533 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <StackPanel>
-                            <TextBlock FontSize="16"
-                                       FontWeight="SemiBold"
-                                       Text="Global hotkeys" />
-                            <CheckBox x:Name="GlobalHotkeysCheckBox"
-                                      Margin="0,9,0,0"
-                                      Content="Enable global hotkeys" />
-                        </StackPanel>
-
-                        <StackPanel Grid.Column="1"
-                                    HorizontalAlignment="Right">
-                            <TextBlock x:Name="RegisteredHotkeyCountTextBlock"
-                                       FontWeight="SemiBold"
-                                       Text="0 registered" />
-                            <Button x:Name="RetryHotkeysButton"
-                                    Margin="0,8,0,0"
-                                    Padding="10,5"
-                                    Click="RetryHotkeysButton_Click"
-                                    Content="Retry unavailable hotkeys" />
-                        </StackPanel>
-
-                        <Grid Grid.Row="1"
-                              Grid.ColumnSpan="2"
-                              Margin="0,14,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="155" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock FontWeight="SemiBold"
-                                       Text="Stop current sound" />
-                            <StackPanel Grid.Column="1">
-                                <TextBlock x:Name="StopHotkeyDisplayTextBlock"
-                                           Text="No hotkey" />
-                                <TextBlock x:Name="StopHotkeyStateTextBlock"
-                                           Margin="0,3,0,0"
-                                           Foreground="#4A5562"
-                                           Text="Not assigned" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2"
-                                        Orientation="Horizontal">
-                                <Button Padding="10,5"
-                                        Click="AssignStopHotkeyButton_Click"
-                                        Content="Assign Stop Sound hotkey" />
-                                <Button x:Name="ClearStopHotkeyButton"
-                                        Margin="8,0,0,0"
-                                        Padding="10,5"
-                                        Click="ClearStopHotkeyButton_Click"
-                                        Content="Clear Stop Sound hotkey" />
-                            </StackPanel>
-                        </Grid>
-
-                        <TextBlock x:Name="HotkeyStatusTextBlock"
-                                   Grid.Row="2"
-                                   Grid.ColumnSpan="2"
-                                   Margin="0,12,0,0"
-                                   Text="Hotkeys are initializing."
-                                   TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="3"
-                                   Grid.ColumnSpan="2"
-                                   Margin="0,7,0,0"
-                                   Foreground="#4A5562"
-                                   Text="Only explicitly registered combinations are received. Soundboard does not monitor or record other keyboard input."
-                                   TextWrapping="Wrap" />
-                    </Grid>
-                </Border>
-
-                <Border Margin="0,0,0,14"
-                        Padding="14"
-                        Background="White"
-                        BorderBrush="#D6DBE1"
-                        BorderThickness="1"
-                        CornerRadius="6">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Orientation="Horizontal">
-                            <Button x:Name="ImportSoundsButton"
-                                    Padding="13,7"
-                                    Click="ImportSoundsButton_Click"
-                                    Content="Import sounds" />
-                            <Button x:Name="StopSoundButton"
-                                    Margin="10,0,0,0"
-                                    Padding="13,7"
-                                    Click="StopSoundButton_Click"
-                                    Content="Stop sound" />
-                            <TextBlock x:Name="SoundCountTextBlock"
-                                       Margin="14,0,0,0"
+                        <StackPanel VerticalAlignment="Center"
+                                    Orientation="Horizontal">
+                            <TextBlock x:Name="SelectedViewTextBlock"
                                        VerticalAlignment="Center"
-                                       Foreground="#4A5562"
+                                       Style="{StaticResource TitleTextStyle}"
+                                       Text="All Sounds" />
+                            <TextBlock x:Name="SoundCountTextBlock"
+                                       Margin="10,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource MutedTextStyle}"
                                        Text="0 sounds" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="1"
                                     Orientation="Horizontal">
-                            <TextBlock Margin="0,0,8,0"
-                                       VerticalAlignment="Center"
-                                       Text="Search" />
-                            <TextBox x:Name="SearchTextBox"
-                                     Width="220"
-                                     MinHeight="30"
-                                     Padding="7,4"
-                                     VerticalContentAlignment="Center"
-                                     TextChanged="SearchTextBox_TextChanged" />
+                            <Border Width="230"
+                                    Style="{StaticResource SearchContainerStyle}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Margin="10,0,0,0"
+                                               VerticalAlignment="Center"
+                                               FontFamily="{StaticResource IconFontFamily}"
+                                               FontSize="12"
+                                               Foreground="{StaticResource TextMutedBrush}"
+                                               Text="&#xE721;" />
+                                    <!--
+                                        Decorative watermark. Its accessible name
+                                        must differ from the TextBox's, otherwise
+                                        assistive tools and automation resolve this
+                                        static text instead of the input field.
+                                    -->
+                                    <TextBlock Grid.Column="1"
+                                               Margin="10,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextMutedBrush}"
+                                               IsHitTestVisible="False"
+                                               Text="Search sounds"
+                                               AutomationProperties.Name="Search box is empty">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Text, ElementName=SearchTextBox}"
+                                                                 Value="">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBox x:Name="SearchTextBox"
+                                             Grid.Column="1"
+                                             Background="Transparent"
+                                             BorderThickness="0"
+                                             TextChanged="SearchTextBox_TextChanged"
+                                             ToolTip="Search by sound name, original filename, or category"
+                                             AutomationProperties.Name="Search sounds by name, filename, or category" />
+                                </Grid>
+                            </Border>
+
+                            <Button x:Name="ImportSoundsButton"
+                                    Margin="10,0,0,0"
+                                    Click="ImportSoundsButton_Click"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    ToolTip="Import WAV, MP3, Ogg Opus, or Ogg Vorbis files"
+                                    AutomationProperties.Name="Import sounds">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Margin="0,0,7,0"
+                                               VerticalAlignment="Center"
+                                               FontFamily="{StaticResource IconFontFamily}"
+                                               FontSize="12"
+                                               Text="&#xE8E5;" />
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontWeight="SemiBold"
+                                               Text="Import" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
 
-                        <Grid Grid.Row="1"
-                              Grid.ColumnSpan="2"
-                              Margin="0,14,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="95" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="55" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock VerticalAlignment="Center"
-                                       Text="Sound volume" />
-                            <Slider x:Name="SoundVolumeSlider"
-                                    Grid.Column="1"
-                                    Minimum="0"
-                                    Maximum="200"
-                                    Value="100"
-                                    TickFrequency="10" />
-                            <TextBlock x:Name="SoundVolumeTextBlock"
-                                       Grid.Column="2"
-                                       Margin="8,0,0,0"
-                                       VerticalAlignment="Center"
-                                       Text="100%" />
-                        </Grid>
-
-                        <TextBlock x:Name="CurrentSoundTextBlock"
-                                   Grid.Row="2"
+                        <TextBlock x:Name="ReorderHelpTextBlock"
+                                   Grid.Row="1"
                                    Grid.ColumnSpan="2"
-                                   Margin="0,10,0,0"
-                                   Foreground="#4A5562"
-                                   Text="Current sound: none" />
+                                   Margin="0,8,0,0"
+                                   Style="{StaticResource MutedTextStyle}"
+                                   Text="Drag the handle or use Move earlier / Move later." />
                     </Grid>
                 </Border>
 
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="185" />
-                        <ColumnDefinition Width="12" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
+                <Border x:Name="SoundboardDropArea"
+                        Grid.Row="1"
+                        AllowDrop="True"
+                        Background="Transparent"
+                        BorderBrush="Transparent"
+                        BorderThickness="2"
+                        Drop="SoundboardDropArea_Drop"
+                        PreviewDragOver="SoundboardDropArea_PreviewDragOver">
+                    <Grid>
 
-                    <Border Padding="10"
-                            Background="White"
-                            BorderBrush="#BFC7D1"
-                            BorderThickness="1"
-                            CornerRadius="6">
-                        <DockPanel>
-                            <StackPanel DockPanel.Dock="Top">
-                                <TextBlock FontSize="16"
-                                           FontWeight="SemiBold"
-                                           Text="Library" />
-                                <TextBlock Margin="0,4,0,10"
-                                           Foreground="#596574"
-                                           Text="Built-in views are fixed. User categories follow."
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-                            <StackPanel DockPanel.Dock="Bottom"
-                                        Margin="0,10,0,0">
-                                <Button Padding="7,5"
-                                        Click="CreateCategoryButton_Click"
-                                        Content="Create category"
-                                        AutomationProperties.Name="Create category" />
-                                <WrapPanel Margin="0,7,0,0">
-                                    <Button x:Name="RenameCategoryButton"
-                                            Margin="0,0,5,5"
-                                            Padding="7,4"
-                                            Click="RenameCategoryButton_Click"
-                                            Content="Rename"
-                                            AutomationProperties.Name="Rename selected category" />
-                                    <Button x:Name="DeleteCategoryButton"
-                                            Margin="0,0,0,5"
-                                            Padding="7,4"
-                                            Click="DeleteCategoryButton_Click"
-                                            Content="Delete"
-                                            AutomationProperties.Name="Delete selected category" />
-                                    <Button x:Name="MoveCategoryUpButton"
-                                            Margin="0,0,5,0"
-                                            Padding="7,4"
-                                            Click="MoveCategoryUpButton_Click"
-                                            Content="Move up"
-                                            AutomationProperties.Name="Move selected category earlier" />
-                                    <Button x:Name="MoveCategoryDownButton"
-                                            Padding="7,4"
-                                            Click="MoveCategoryDownButton_Click"
-                                            Content="Move down"
-                                            AutomationProperties.Name="Move selected category later" />
-                                </WrapPanel>
-                            </StackPanel>
-                            <ListBox x:Name="LibraryViewsListBox"
-                                     MinHeight="150"
-                                     BorderThickness="0"
-                                     SelectionChanged="LibraryViewsListBox_SelectionChanged"
-                                     AutomationProperties.Name="Library views and categories">
-                                <ListBox.ItemContainerStyle>
-                                    <Style TargetType="ListBoxItem">
-                                        <Setter Property="AutomationProperties.Name"
-                                                Value="{Binding DisplayName}" />
-                                    </Style>
-                                </ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Padding="4,5"
-                                                   Text="{Binding DisplayName}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding DisplayName}" />
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                        </DockPanel>
-                    </Border>
-
-                    <StackPanel Grid.Column="2">
-                        <Grid Margin="2,0,2,7">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock x:Name="SelectedViewTextBlock"
-                                       FontSize="16"
-                                       FontWeight="SemiBold"
-                                       Text="View: All Sounds" />
-                            <TextBlock x:Name="ReorderHelpTextBlock"
-                                       Grid.Column="1"
-                                       MaxWidth="330"
-                                       Foreground="#596574"
-                                       Text="Drag the handle or use Move earlier/Move later."
-                                       TextAlignment="Right"
-                                       TextWrapping="Wrap" />
-                        </Grid>
-
-                        <Border x:Name="SoundboardDropArea"
-                                MinHeight="245"
-                                Padding="10"
-                                AllowDrop="True"
-                                Background="#F9FAFB"
-                                BorderBrush="#BFC7D1"
-                                BorderThickness="1"
-                                CornerRadius="6"
-                                Drop="SoundboardDropArea_Drop"
-                                PreviewDragOver="SoundboardDropArea_PreviewDragOver">
-                            <Grid>
-                                <TextBlock x:Name="EmptyLibraryTextBlock"
-                                           MaxWidth="420"
+                        <!-- Empty / no-match state -->
+                        <StackPanel x:Name="EmptyStatePanel"
+                                    MaxWidth="440"
+                                    Margin="24"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <Border Width="56"
+                                    Height="56"
+                                    HorizontalAlignment="Center"
+                                    Background="{StaticResource SurfaceBackgroundBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="16">
+                                <TextBlock x:Name="EmptyStateGlyph"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
-                                           FontSize="16"
-                                           Foreground="#66717E"
-                                           Text="No sounds yet. Import WAV, MP3, Ogg Opus, or Ogg Vorbis files, or drop them here."
-                                           TextAlignment="Center"
-                                           TextWrapping="Wrap" />
+                                           FontFamily="{StaticResource IconFontFamily}"
+                                           FontSize="22"
+                                           Foreground="{StaticResource TextMutedBrush}"
+                                           Text="&#xE767;" />
+                            </Border>
+                            <TextBlock x:Name="EmptyStateTitleTextBlock"
+                                       Margin="0,16,0,0"
+                                       HorizontalAlignment="Center"
+                                       Style="{StaticResource TitleTextStyle}"
+                                       Text="No sounds yet"
+                                       TextAlignment="Center" />
+                            <TextBlock x:Name="EmptyStateMessageTextBlock"
+                                       Margin="0,7,0,0"
+                                       Style="{StaticResource SecondaryTextStyle}"
+                                       Text="Import a few clips to get started."
+                                       TextAlignment="Center" />
+                            <Button x:Name="EmptyStateActionButton"
+                                    Margin="0,18,0,0"
+                                    HorizontalAlignment="Center"
+                                    Click="EmptyStateActionButton_Click"
+                                    Content="Import Sounds"
+                                    Style="{StaticResource PrimaryButtonStyle}" />
+                            <TextBlock x:Name="EmptyStateFormatsTextBlock"
+                                       Margin="0,16,0,0"
+                                       Style="{StaticResource MutedTextStyle}"
+                                       Text="Supported formats: WAV, MP3, Ogg Opus, Ogg Vorbis, .opus — or drag files anywhere onto this area."
+                                       TextAlignment="Center" />
+                        </StackPanel>
 
-                                <ItemsControl x:Name="SoundTilesItemsControl">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border x:Name="TileBorder"
-                                                    Width="286"
-                                                    MinHeight="278"
-                                                    Margin="7"
-                                                    Padding="10"
-                                                    AllowDrop="True"
-                                                    Background="{Binding TileBackground}"
-                                                    BorderBrush="{Binding TileBorderBrush}"
-                                                    BorderThickness="2"
-                                                    CornerRadius="6"
-                                                    DragOver="SoundTile_DragOver"
-                                                    Drop="SoundTile_Drop"
-                                                    Tag="{Binding}">
-                                                <Border.ContextMenu>
-                                                    <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                                                        <MenuItem Header="Move earlier"
-                                                                  IsEnabled="{Binding CanReorder}"
-                                                                  Click="MoveSoundEarlierMenuItem_Click"
-                                                                  Tag="{Binding}"
-                                                                  AutomationProperties.Name="Move sound earlier" />
-                                                        <MenuItem Header="Move later"
-                                                                  IsEnabled="{Binding CanReorder}"
-                                                                  Click="MoveSoundLaterMenuItem_Click"
-                                                                  Tag="{Binding}"
-                                                                  AutomationProperties.Name="Move sound later" />
-                                                    </ContextMenu>
-                                                </Border.ContextMenu>
-                                                <Grid>
-                                                    <Grid.RowDefinitions>
-                                                        <RowDefinition Height="Auto" />
-                                                        <RowDefinition Height="*" />
-                                                        <RowDefinition Height="Auto" />
-                                                        <RowDefinition Height="Auto" />
-                                                    </Grid.RowDefinitions>
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="Auto" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="Auto" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <Button Width="32"
-                                                                Height="28"
-                                                                Padding="2"
+                        <!-- Sound grid -->
+                        <ScrollViewer x:Name="SoundGridScrollViewer"
+                                      Padding="12,12,6,12"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <ItemsControl x:Name="SoundTilesItemsControl"
+                                          AutomationProperties.Name="Sound tiles">
+                                <ItemsControl.ItemContainerStyle>
+                                    <!-- Without this the container announces the view model's type name. -->
+                                    <Style TargetType="ContentPresenter">
+                                        <Setter Property="AutomationProperties.Name"
+                                                Value="{Binding TileAutomationName}" />
+                                    </Style>
+                                </ItemsControl.ItemContainerStyle>
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border x:Name="TileBorder"
+                                                Width="204"
+                                                Height="176"
+                                                Margin="0,0,12,12"
+                                                AllowDrop="True"
+                                                Background="{StaticResource TileBackgroundBrush}"
+                                                BorderBrush="{StaticResource BorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="{StaticResource SurfaceCornerRadius}"
+                                                DragOver="SoundTile_DragOver"
+                                                Drop="SoundTile_Drop"
+                                                SnapsToDevicePixels="True"
+                                                Tag="{Binding}"
+                                                ToolTip="{Binding DisplayName}">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="4" />
+                                                    <RowDefinition Height="*" />
+                                                </Grid.RowDefinitions>
+
+                                                <Border x:Name="AccentSource"
+                                                        Style="{StaticResource TileAccentStripStyle}"
+                                                        CornerRadius="9,9,0,0" />
+
+                                                <Grid Grid.Row="1">
+
+                                                    <!-- Primary surface: play / restart -->
+                                                    <Button x:Name="PlaySurface"
+                                                            Click="PlayTileButton_Click"
+                                                            Style="{StaticResource TileSurfaceButtonStyle}"
+                                                            Tag="{Binding}"
+                                                            AutomationProperties.Name="{Binding TileAutomationName}"
+                                                            AutomationProperties.HelpText="Activate to play this sound from the start.">
+                                                        <Grid Margin="12,10,12,10">
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="*" />
+                                                                <RowDefinition Height="Auto" />
+                                                            </Grid.RowDefinitions>
+
+                                                            <Grid Width="34"
+                                                                  Height="34"
+                                                                  HorizontalAlignment="Left">
+                                                                <Border x:Name="IconSurface"
+                                                                        Background="{Binding Background, ElementName=AccentSource}"
+                                                                        CornerRadius="10"
+                                                                        Opacity="0.22" />
+                                                                <TextBlock x:Name="PlayGlyph"
+                                                                           HorizontalAlignment="Center"
+                                                                           VerticalAlignment="Center"
+                                                                           FontFamily="{StaticResource IconFontFamily}"
+                                                                           FontSize="14"
+                                                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                                                           Text="&#xE768;" />
+                                                            </Grid>
+
+                                                            <TextBlock Grid.Row="1"
+                                                                       Margin="0,10,0,0"
+                                                                       FontSize="{StaticResource FontSizeBody}"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                                                       Text="{Binding DisplayName}"
+                                                                       TextTrimming="CharacterEllipsis" />
+
+                                                            <TextBlock Grid.Row="2"
+                                                                       Margin="0,3,0,0"
+                                                                       FontSize="{StaticResource FontSizeCaption}"
+                                                                       Foreground="{StaticResource TextMutedBrush}"
+                                                                       TextTrimming="CharacterEllipsis">
+                                                                <Run Text="{Binding DurationText, Mode=OneWay}" />
+                                                                <Run Text="·" />
+                                                                <Run Text="{Binding FormatLabel, Mode=OneWay}" />
+                                                            </TextBlock>
+
+                                                            <WrapPanel Grid.Row="4">
+                                                                <Border Margin="0,3,5,0"
+                                                                        Style="{StaticResource KeyCapChipStyle}"
+                                                                        Visibility="{Binding HasHotkey, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                                    <TextBlock MaxWidth="120"
+                                                                               Style="{StaticResource KeyCapTextStyle}"
+                                                                               Text="{Binding HotkeyDisplayText}"
+                                                                               ToolTip="{Binding HotkeyStateText}" />
+                                                                </Border>
+                                                                <Border x:Name="PlayingBadge"
+                                                                        Margin="0,3,5,0"
+                                                                        Padding="7,2"
+                                                                        Background="{StaticResource PlayingSubtleBrush}"
+                                                                        BorderBrush="{StaticResource PlayingBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="4"
+                                                                        Visibility="Collapsed">
+                                                                    <TextBlock Foreground="{StaticResource PlayingBrush}"
+                                                                               Style="{StaticResource TileBadgeTextStyle}"
+                                                                               Text="Playing" />
+                                                                </Border>
+                                                                <Border Margin="0,3,5,0"
+                                                                        Padding="7,2"
+                                                                        BorderBrush="{StaticResource BorderStrongBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="4"
+                                                                        Visibility="{Binding HasClipEdits, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}"
+                                                                               Style="{StaticResource TileBadgeTextStyle}"
+                                                                               Text="{Binding EditedStateText}" />
+                                                                </Border>
+                                                                <Border Margin="0,3,5,0"
+                                                                        Padding="7,2"
+                                                                        BorderBrush="{StaticResource BorderStrongBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="4"
+                                                                        Visibility="{Binding Sound.NormalizeLoudness, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                                    <TextBlock MaxWidth="120"
+                                                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                                                               Style="{StaticResource TileBadgeTextStyle}"
+                                                                               Text="{Binding NormalizationStateText}"
+                                                                               ToolTip="{Binding NormalizationStateText}" />
+                                                                </Border>
+                                                            </WrapPanel>
+                                                        </Grid>
+                                                    </Button>
+
+                                                    <!--
+                                                        Secondary actions sit above the play surface as
+                                                        siblings, never nested inside it, so a click on
+                                                        one can never fall through to playback.
+                                                    -->
+                                                    <StackPanel Margin="0,6,6,0"
+                                                                HorizontalAlignment="Right"
+                                                                VerticalAlignment="Top"
+                                                                Orientation="Horizontal"
+                                                                Panel.ZIndex="1">
+                                                        <Button x:Name="DragHandle"
+                                                                Width="26"
+                                                                Height="26"
+                                                                Content="&#xE700;"
                                                                 IsEnabled="{Binding CanReorder}"
                                                                 PreviewMouseLeftButtonDown="SoundDragHandle_PreviewMouseLeftButtonDown"
                                                                 PreviewMouseMove="SoundDragHandle_PreviewMouseMove"
-                                                                Content="↕"
+                                                                Style="{StaticResource IconButtonStyle}"
                                                                 Tag="{Binding}"
                                                                 ToolTip="{Binding ReorderAvailabilityText}"
                                                                 AutomationProperties.Name="Drag to reorder sound" />
-                                                        <TextBlock Grid.Column="1"
-                                                                   Margin="7,0"
-                                                                   VerticalAlignment="Center"
-                                                                   Foreground="#596574"
-                                                                   Text="{Binding FavoriteStateText}" />
-                                                        <Button Grid.Column="2"
-                                                                Width="34"
-                                                                Height="28"
-                                                                Padding="2"
+                                                        <Button x:Name="FavoriteButton"
+                                                                Width="26"
+                                                                Height="26"
                                                                 Click="FavoriteTileButton_Click"
-                                                                Content="{Binding FavoriteGlyph}"
+                                                                Content="&#xE734;"
+                                                                Style="{StaticResource IconButtonStyle}"
                                                                 Tag="{Binding}"
                                                                 ToolTip="{Binding FavoriteActionText}"
                                                                 AutomationProperties.Name="{Binding FavoriteActionText}" />
-                                                    </Grid>
-
-                                                    <Button Grid.Row="1"
-                                                            Margin="0,5,0,0"
-                                                            Padding="8"
-                                                            HorizontalContentAlignment="Stretch"
-                                                            Background="Transparent"
-                                                            BorderThickness="0"
-                                                            Click="PlayTileButton_Click"
-                                                            Tag="{Binding}"
-                                                            AutomationProperties.Name="{Binding DisplayName, StringFormat=Play sound {0}}">
-                                                        <StackPanel>
-                                                            <TextBlock FontSize="16"
-                                                                       FontWeight="SemiBold"
-                                                                       Text="{Binding DisplayName}"
-                                                                       TextAlignment="Left"
-                                                                       TextTrimming="CharacterEllipsis"
-                                                                       ToolTip="{Binding DisplayName}" />
-                                                            <TextBlock Margin="0,5,0,0"
-                                                                       Foreground="#596574"
-                                                                       Text="{Binding DurationText}"
-                                                                       TextAlignment="Left" />
-                                                             <TextBlock Margin="0,3,0,0"
-                                                                        FontWeight="SemiBold"
-                                                                        Foreground="#7A3E00"
-                                                                        Text="{Binding EditedStateText}"
-                                                                        TextAlignment="Left" />
-                                                            <TextBlock Margin="0,3,0,0"
-                                                                       FontWeight="SemiBold"
-                                                                       Foreground="#174D70"
-                                                                       Text="{Binding NormalizationStateText}"
-                                                                       TextAlignment="Left"
-                                                                       TextWrapping="Wrap" />
-                                                            <TextBlock Margin="0,3,0,0"
-                                                                       Foreground="#596574"
-                                                                       Text="{Binding FormatLabel}"
-                                                                       TextAlignment="Left" />
-                                                            <TextBlock Margin="0,4,0,0"
-                                                                       Foreground="#596574"
-                                                                       Text="{Binding CategoryName}"
-                                                                       TextAlignment="Left"
-                                                                       TextTrimming="CharacterEllipsis" />
-                                                            <TextBlock Margin="0,7,0,0"
-                                                                       FontWeight="SemiBold"
-                                                                       Text="{Binding PlayingLabel}"
-                                                                       TextAlignment="Left" />
-                                                            <TextBlock Margin="0,8,0,0"
-                                                                       FontWeight="SemiBold"
-                                                                       Text="{Binding HotkeyDisplayText}"
-                                                                       TextAlignment="Left" />
-                                                            <TextBlock Margin="0,3,0,0"
-                                                                       Foreground="#596574"
-                                                                       Text="{Binding HotkeyStateText}"
-                                                                       TextAlignment="Left"
-                                                                       TextWrapping="Wrap"
-                                                                       ToolTip="{Binding HotkeyError}" />
-                                                        </StackPanel>
-                                                    </Button>
-                                                    <Separator Grid.Row="2"
-                                                               Margin="0,6" />
-                                                    <WrapPanel Grid.Row="3"
-                                                               HorizontalAlignment="Right">
-                                                        <Button Padding="7,4"
-                                                                Click="AssignTileHotkeyButton_Click"
-                                                                Content="Hotkey"
+                                                        <Button x:Name="OverflowButton"
+                                                                Width="26"
+                                                                Height="26"
+                                                                Click="SoundOverflowButton_Click"
+                                                                Content="&#xE712;"
+                                                                Style="{StaticResource IconButtonStyle}"
                                                                 Tag="{Binding}"
-                                                                AutomationProperties.Name="Assign or change sound hotkey" />
-                                                        <Button Padding="7,4"
-                                                                Margin="6,0,0,0"
-                                                                Click="EditTileButton_Click"
-                                                                Content="Edit"
-                                                                Tag="{Binding}"
-                                                                AutomationProperties.Name="Edit sound metadata" />
-                                                        <Button Padding="7,4"
-                                                                Margin="6,0,0,0"
-                                                                Click="EditClipTileButton_Click"
-                                                                Content="Edit clip"
-                                                                Tag="{Binding}"
-                                                                AutomationProperties.Name="Edit sound clip" />
-                                                        <Button Margin="6,0,0,0"
-                                                                Padding="7,4"
-                                                                Click="RemoveTileButton_Click"
-                                                                Content="Remove"
-                                                                Tag="{Binding}"
-                                                                AutomationProperties.Name="Remove sound" />
-                                                    </WrapPanel>
+                                                                ToolTip="More actions"
+                                                                AutomationProperties.Name="{Binding DisplayName, StringFormat=More actions for {0}}">
+                                                            <Button.ContextMenu>
+                                                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                                    <MenuItem Header="Edit sound…"
+                                                                              Click="EditTileButton_Click"
+                                                                              Tag="{Binding}"
+                                                                              AutomationProperties.Name="Edit sound metadata" />
+                                                                    <MenuItem Header="Edit clip…"
+                                                                              Click="EditClipTileButton_Click"
+                                                                              Tag="{Binding}"
+                                                                              AutomationProperties.Name="Edit sound clip" />
+                                                                    <MenuItem Header="Assign hotkey…"
+                                                                              Click="AssignTileHotkeyButton_Click"
+                                                                              Tag="{Binding}"
+                                                                              AutomationProperties.Name="Assign or change sound hotkey" />
+                                                                    <Separator />
+                                                                    <MenuItem Header="Move earlier"
+                                                                              IsEnabled="{Binding CanReorder}"
+                                                                              Click="MoveSoundEarlierMenuItem_Click"
+                                                                              Tag="{Binding}"
+                                                                              AutomationProperties.Name="Move sound earlier" />
+                                                                    <MenuItem Header="Move later"
+                                                                              IsEnabled="{Binding CanReorder}"
+                                                                              Click="MoveSoundLaterMenuItem_Click"
+                                                                              Tag="{Binding}"
+                                                                              AutomationProperties.Name="Move sound later" />
+                                                                    <Separator />
+                                                                    <MenuItem Header="Remove sound…"
+                                                                              Click="RemoveTileButton_Click"
+                                                                              Tag="{Binding}"
+                                                                              AutomationProperties.Name="Remove sound" />
+                                                                </ContextMenu>
+                                                            </Button.ContextMenu>
+                                                        </Button>
+                                                    </StackPanel>
                                                 </Grid>
-                                            </Border>
-                                            <DataTemplate.Triggers>
-                                                <DataTrigger Binding="{Binding IsPlaying}"
-                                                             Value="True">
-                                                    <Setter TargetName="TileBorder"
-                                                            Property="BorderBrush"
-                                                            Value="#1967A3" />
-                                                    <Setter TargetName="TileBorder"
-                                                            Property="BorderThickness"
-                                                            Value="4" />
-                                                </DataTrigger>
-                                            </DataTemplate.Triggers>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </Grid>
-                        </Border>
-                    </StackPanel>
-                </Grid>
+                                            </Grid>
+                                        </Border>
 
-                <Expander Margin="0,14,0,0"
-                          Header="Diagnostics">
-                    <Border Margin="0,8,0,0"
-                            Padding="12"
-                            Background="White"
-                            BorderBrush="#D6DBE1"
-                            BorderThickness="1"
-                            CornerRadius="6">
-                        <StackPanel>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="130" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="55" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Final output peak" />
-                                <ProgressBar x:Name="OutputPeakProgressBar"
-                                             Grid.Column="1"
-                                             Height="15"
-                                             Maximum="1" />
-                                <TextBlock x:Name="OutputPeakTextBlock"
-                                           Grid.Column="2"
-                                           Margin="8,0,0,0"
-                                           Text="0%" />
-                            </Grid>
-                            <TextBlock x:Name="TargetFormatTextBlock"
-                                       Margin="0,10,0,0"
-                                       Text="Select a render endpoint."
-                                       TextWrapping="Wrap" />
-                            <TextBox x:Name="DiagnosticStatusTextBox"
-                                     Height="245"
-                                     Margin="0,10,0,0"
-                                     Padding="8"
-                                     AcceptsReturn="True"
-                                     Background="#FAFAFA"
-                                     BorderThickness="0"
-                                     FontFamily="Consolas"
-                                     HorizontalScrollBarVisibility="Auto"
-                                     IsReadOnly="True"
-                                     Text="Diagnostics are loading."
-                                     VerticalScrollBarVisibility="Auto" />
-                        </StackPanel>
-                    </Border>
-                </Expander>
-            </StackPanel>
-        </ScrollViewer>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                                <Setter TargetName="TileBorder"
+                                                        Property="BorderBrush"
+                                                        Value="{StaticResource PlayingBrush}" />
+                                                <Setter TargetName="TileBorder"
+                                                        Property="BorderThickness"
+                                                        Value="2" />
+                                                <Setter TargetName="TileBorder"
+                                                        Property="Background"
+                                                        Value="{StaticResource PlayingSubtleBrush}" />
+                                                <Setter TargetName="PlayingBadge"
+                                                        Property="Visibility"
+                                                        Value="Visible" />
+                                                <Setter TargetName="PlayGlyph"
+                                                        Property="Text"
+                                                        Value="&#xE72C;" />
+                                                <Setter TargetName="PlayGlyph"
+                                                        Property="Foreground"
+                                                        Value="{StaticResource PlayingBrush}" />
+                                                <Setter TargetName="IconSurface"
+                                                        Property="Opacity"
+                                                        Value="0.4" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsFavorite}" Value="True">
+                                                <Setter TargetName="FavoriteButton"
+                                                        Property="Content"
+                                                        Value="&#xE735;" />
+                                                <Setter TargetName="FavoriteButton"
+                                                        Property="Foreground"
+                                                        Value="{StaticResource WarningBrush}" />
+                                            </DataTrigger>
+                                            <Trigger SourceName="PlaySurface"
+                                                     Property="IsMouseOver"
+                                                     Value="True">
+                                                <Setter TargetName="TileBorder"
+                                                        Property="Background"
+                                                        Value="{StaticResource TileHoverBackgroundBrush}" />
+                                                <Setter TargetName="TileBorder"
+                                                        Property="BorderBrush"
+                                                        Value="{StaticResource BorderStrongBrush}" />
+                                            </Trigger>
+                                            <Trigger SourceName="PlaySurface"
+                                                     Property="IsPressed"
+                                                     Value="True">
+                                                <Setter TargetName="TileBorder"
+                                                        Property="Background"
+                                                        Value="{StaticResource TilePressedBackgroundBrush}" />
+                                            </Trigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
 
+        <!-- ==================== Status bar ==================== -->
         <Border Grid.Row="2"
-                Padding="20,10"
-                Background="White"
-                BorderBrush="#D6DBE1"
+                Padding="18,9"
+                Background="{StaticResource SidebarBackgroundBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="0,1,0,0">
-            <StackPanel>
-                <TextBlock x:Name="StatusTextBlock"
-                           FontWeight="SemiBold"
-                           Text="Ready."
-                           TextWrapping="Wrap" />
-                <TextBlock x:Name="ErrorTextBlock"
-                           Margin="0,4,0,0"
-                           Foreground="DarkRed"
-                           TextWrapping="Wrap" />
-            </StackPanel>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <TextBlock Margin="0,0,7,0"
+                               VerticalAlignment="Center"
+                               FontFamily="{StaticResource IconFontFamily}"
+                               FontSize="12"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="&#xE768;" />
+                    <TextBlock x:Name="CurrentSoundTextBlock"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionTextStyle}"
+                               Text="No sound playing"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal">
+                    <Border Style="{StaticResource StatusChipStyle}">
+                        <TextBlock x:Name="HotkeyActionTextBlock"
+                                   MaxWidth="220"
+                                   Style="{StaticResource MutedTextStyle}"
+                                   Text="Hotkey: none"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap"
+                                   ToolTip="Most recent global-hotkey action" />
+                    </Border>
+                    <Border Style="{StaticResource StatusChipStyle}">
+                        <TextBlock x:Name="MonitoringStatusTextBlock"
+                                   Style="{StaticResource MutedTextStyle}"
+                                   Text="Monitor: off"
+                                   TextWrapping="NoWrap"
+                                   ToolTip="Headphone monitoring state" />
+                    </Border>
+                    <Border x:Name="LimiterActivityChip"
+                            Style="{StaticResource StatusChipStyle}"
+                            Visibility="Collapsed">
+                        <TextBlock x:Name="LimiterActivityTextBlock"
+                                   Foreground="{StaticResource WarningBrush}"
+                                   Style="{StaticResource MutedTextStyle}"
+                                   Text="Limiting 0.0 dB"
+                                   TextWrapping="NoWrap"
+                                   ToolTip="The safety limiter is reducing output gain" />
+                    </Border>
+
+                    <TextBlock Margin="4,0,7,0"
+                               VerticalAlignment="Center"
+                               FontFamily="{StaticResource IconFontFamily}"
+                               FontSize="12"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="&#xE767;" />
+                    <Slider x:Name="SoundVolumeSlider"
+                            Width="110"
+                            VerticalAlignment="Center"
+                            Minimum="0"
+                            Maximum="200"
+                            Value="100"
+                            TickFrequency="10"
+                            ToolTip="Soundboard volume"
+                            AutomationProperties.Name="Sound volume percent" />
+                    <TextBlock x:Name="SoundVolumeTextBlock"
+                               Width="42"
+                               Margin="8,0,0,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="100%"
+                               TextAlignment="Right"
+                               TextWrapping="NoWrap" />
+                </StackPanel>
+
+                <StackPanel Grid.Row="1"
+                            Grid.ColumnSpan="2"
+                            Margin="0,6,0,0">
+                    <TextBlock x:Name="StatusTextBlock"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="Ready."
+                               AutomationProperties.LiveSetting="Polite" />
+                    <TextBlock x:Name="ErrorTextBlock"
+                               Margin="0,3,0,0"
+                               Style="{StaticResource ErrorLineStyle}"
+                               AutomationProperties.LiveSetting="Assertive" />
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>

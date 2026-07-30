@@ -1,0 +1,521 @@
+<Window x:Class="Soundboard.App.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Soundboard settings"
+        Width="820"
+        Height="720"
+        MinWidth="640"
+        MinHeight="520"
+        Background="{StaticResource AppBackgroundBrush}"
+        FontFamily="{StaticResource UiFontFamily}"
+        FontSize="{StaticResource FontSizeBody}"
+        Foreground="{StaticResource TextPrimaryBrush}"
+        ShowInTaskbar="False"
+        TextOptions.TextFormattingMode="Ideal"
+        WindowStartupLocation="CenterOwner">
+
+    <Window.Resources>
+        <Style x:Key="SettingsGroupStyle"
+               TargetType="Border"
+               BasedOn="{StaticResource SurfacePanelStyle}">
+            <Setter Property="Margin" Value="0,0,0,14" />
+        </Style>
+        <Style x:Key="FieldLabelStyle"
+               TargetType="TextBlock"
+               BasedOn="{StaticResource SubtitleTextStyle}">
+            <Setter Property="Margin" Value="0,0,0,6" />
+        </Style>
+        <Style x:Key="ValueTextStyle"
+               TargetType="TextBlock"
+               BasedOn="{StaticResource SecondaryTextStyle}">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="TextAlignment" Value="Right" />
+            <Setter Property="TextWrapping" Value="NoWrap" />
+        </Style>
+
+        <!--
+            An explicit ItemTemplate rather than DisplayMemberPath: the
+            themed ComboBox draws its selected value through
+            SelectionBoxItemTemplate, which is only populated from
+            ItemTemplate. DisplayMemberPath would leave the collapsed
+            ComboBox showing the endpoint's raw ToString().
+        -->
+        <DataTemplate x:Key="AudioEndpointTemplate">
+            <TextBlock Text="{Binding FriendlyName}"
+                       TextTrimming="CharacterEllipsis" />
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Padding="20,16,20,0"
+                Background="{StaticResource SidebarBackgroundBrush}">
+            <StackPanel>
+                <TextBlock Style="{StaticResource DisplayTextStyle}"
+                           Text="Settings" />
+                <TextBlock Margin="0,4,0,12"
+                           Style="{StaticResource SecondaryTextStyle}"
+                           Text="Device, monitoring, hotkey, and loudness options. Changing a setting here never starts or stops the audio engine." />
+            </StackPanel>
+        </Border>
+
+        <TabControl x:Name="SettingsTabControl"
+                    Grid.Row="1"
+                    Background="{StaticResource AppBackgroundBrush}">
+
+            <!-- ==================== Audio devices ==================== -->
+            <TabItem Header="Audio devices">
+                <ScrollViewer Padding="20,18"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="MICROPHONE" />
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Text="Input device" />
+                                <ComboBox x:Name="MicrophoneComboBox"
+                                          ItemTemplate="{StaticResource AudioEndpointTemplate}"
+                                          IsTextSearchEnabled="True"
+                                          TextSearch.TextPath="FriendlyName"
+                                          AutomationProperties.Name="Microphone input device" />
+
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="52" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               Text="Volume" />
+                                    <Slider x:Name="MicrophoneVolumeSlider"
+                                            Grid.Column="1"
+                                            Minimum="0"
+                                            Maximum="200"
+                                            Value="100"
+                                            TickFrequency="10"
+                                            AutomationProperties.Name="Microphone volume percent" />
+                                    <TextBlock x:Name="MicrophoneVolumeTextBlock"
+                                               Grid.Column="2"
+                                               Style="{StaticResource ValueTextStyle}"
+                                               Text="100%" />
+                                </Grid>
+
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="52" />
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="MuteMicrophoneCheckBox"
+                                              Margin="0,0,16,0"
+                                              VerticalAlignment="Center"
+                                              Content="Mute microphone" />
+                                    <ProgressBar x:Name="MicrophonePeakProgressBar"
+                                                 Grid.Column="1"
+                                                 Maximum="1"
+                                                 AutomationProperties.Name="Microphone peak level" />
+                                    <TextBlock x:Name="MicrophonePeakTextBlock"
+                                               Grid.Column="2"
+                                               Style="{StaticResource ValueTextStyle}"
+                                               Text="0%" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="VIRTUAL OUTPUT TO DISCORD" />
+                                <TextBlock Style="{StaticResource FieldLabelStyle}"
+                                           Text="Virtual output device" />
+                                <ComboBox x:Name="VirtualOutputComboBox"
+                                          ItemTemplate="{StaticResource AudioEndpointTemplate}"
+                                          IsTextSearchEnabled="True"
+                                          TextSearch.TextPath="FriendlyName"
+                                          AutomationProperties.Name="Virtual output device" />
+
+                                <TextBlock x:Name="VirtualRoutingTextBlock"
+                                           Margin="0,12,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Microphone + Soundboard → CABLE Input" />
+                                <TextBlock x:Name="VirtualCableStatusTextBlock"
+                                           Margin="0,6,0,0"
+                                           Foreground="{StaticResource WarningBrush}"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Checking for VB-CABLE endpoints…" />
+
+                                <TextBlock Margin="0,14,0,0"
+                                           Style="{StaticResource FieldLabelStyle}"
+                                           Text="Output format" />
+                                <TextBlock x:Name="TargetFormatTextBlock"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Select a render endpoint." />
+
+                                <StackPanel Margin="0,16,0,0"
+                                            Orientation="Horizontal">
+                                    <Button x:Name="RefreshDevicesButton"
+                                            Content="Refresh devices"
+                                            AutomationProperties.Name="Refresh audio devices" />
+                                    <TextBlock x:Name="DeviceCountsTextBlock"
+                                               Margin="14,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Style="{StaticResource MutedTextStyle}"
+                                               Text="Waiting for discovery…" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource MutedTextStyle}"
+                                   Text="Device selectors are locked while the audio engine is running. Stop the engine from the main window to change devices. Soundboard never changes your Windows default devices." />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== Monitoring ==================== -->
+            <TabItem Header="Monitoring">
+                <ScrollViewer Padding="20,18"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="HEADPHONE MONITORING" />
+                                <CheckBox x:Name="MonitorSoundsCheckBox"
+                                          Content="Monitor sounds through headphones" />
+
+                                <TextBlock Margin="0,16,0,0"
+                                           Style="{StaticResource FieldLabelStyle}"
+                                           Text="Physical monitor output" />
+                                <ComboBox x:Name="MonitorOutputComboBox"
+                                          ItemTemplate="{StaticResource AudioEndpointTemplate}"
+                                          IsTextSearchEnabled="True"
+                                          TextSearch.TextPath="FriendlyName"
+                                          AutomationProperties.Name="Physical monitor output device" />
+
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="52" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               Text="Monitor volume" />
+                                    <Slider x:Name="MonitorVolumeSlider"
+                                            Grid.Column="1"
+                                            Minimum="0"
+                                            Maximum="200"
+                                            Value="100"
+                                            TickFrequency="10"
+                                            AutomationProperties.Name="Monitor volume percent" />
+                                    <TextBlock x:Name="MonitorVolumeTextBlock"
+                                               Grid.Column="2"
+                                               Style="{StaticResource ValueTextStyle}"
+                                               Text="100%" />
+                                </Grid>
+
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="110" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="52" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               Text="Monitor peak" />
+                                    <ProgressBar x:Name="MonitorPeakProgressBar"
+                                                 Grid.Column="1"
+                                                 Maximum="1"
+                                                 AutomationProperties.Name="Monitor peak level" />
+                                    <TextBlock x:Name="MonitorPeakTextBlock"
+                                               Grid.Column="2"
+                                               Style="{StaticResource ValueTextStyle}"
+                                               Text="0%" />
+                                </Grid>
+
+                                <TextBlock x:Name="MonitorRoutingTextBlock"
+                                           Margin="0,14,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Soundboard only → select a physical output" />
+                                <TextBlock x:Name="MonitorStatusTextBlock"
+                                           Margin="0,6,0,0"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Monitoring is disabled." />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="14"
+                                Background="{StaticResource AccentSubtleBrush}"
+                                BorderBrush="{StaticResource AccentBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{StaticResource SurfaceCornerRadius}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Margin="0,0,12,0"
+                                           VerticalAlignment="Top"
+                                           FontFamily="{StaticResource IconFontFamily}"
+                                           FontSize="16"
+                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                           Text="&#xE946;" />
+                                <TextBlock MaxWidth="600"
+                                           Style="{StaticResource BodyTextStyle}"
+                                           Text="Your microphone is never monitored through this app. Only soundboard audio is sent to the headphone output, so you will never hear yourself and cannot create a feedback loop." />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== Hotkeys ==================== -->
+            <TabItem Header="Hotkeys">
+                <ScrollViewer Padding="20,18"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox x:Name="GlobalHotkeysCheckBox"
+                                              VerticalAlignment="Center"
+                                              Content="Enable global hotkeys" />
+                                    <TextBlock x:Name="RegisteredHotkeyCountTextBlock"
+                                               Grid.Column="1"
+                                               VerticalAlignment="Center"
+                                               Style="{StaticResource SubtitleTextStyle}"
+                                               Text="0 registered" />
+                                </Grid>
+                                <TextBlock x:Name="HotkeyStatusTextBlock"
+                                           Margin="0,12,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Hotkeys are initializing." />
+                                <Button x:Name="RetryHotkeysButton"
+                                        Margin="0,14,0,0"
+                                        HorizontalAlignment="Left"
+                                        Content="Retry unavailable hotkeys" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="STOP SOUND HOTKEY" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <Border HorizontalAlignment="Left"
+                                                Style="{StaticResource KeyCapChipStyle}">
+                                            <TextBlock x:Name="StopHotkeyDisplayTextBlock"
+                                                       Style="{StaticResource KeyCapTextStyle}"
+                                                       Text="No hotkey" />
+                                        </Border>
+                                        <TextBlock x:Name="StopHotkeyStateTextBlock"
+                                                   Margin="0,6,0,0"
+                                                   Style="{StaticResource MutedTextStyle}"
+                                                   Text="Not assigned" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                                VerticalAlignment="Center"
+                                                Orientation="Horizontal">
+                                        <Button x:Name="AssignStopHotkeyButton"
+                                                Content="Assign hotkey"
+                                                AutomationProperties.Name="Assign Stop Sound hotkey" />
+                                        <Button x:Name="ClearStopHotkeyButton"
+                                                Margin="8,0,0,0"
+                                                Content="Clear"
+                                                Style="{StaticResource DangerButtonStyle}"
+                                                AutomationProperties.Name="Clear Stop Sound hotkey" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="14"
+                                Background="{StaticResource SurfaceBackgroundBrush}"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{StaticResource SurfaceCornerRadius}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SubtitleTextStyle}"
+                                           Text="Privacy" />
+                                <TextBlock Margin="0,6,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Only explicitly registered combinations are received. Soundboard does not monitor or record other keyboard input. Per-sound hotkeys are assigned from each tile's action menu on the soundboard." />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== Loudness and safety ==================== -->
+            <TabItem Header="Loudness &amp; safety">
+                <ScrollViewer Padding="20,18"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="NORMALIZATION" />
+                                <TextBlock Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Normalization adjusts individual sound effects toward a consistent perceived loudness. It affects sound audio only; microphone volume is unchanged and audio files are never rewritten." />
+                                <TextBlock Margin="0,14,0,0"
+                                           Style="{StaticResource FieldLabelStyle}"
+                                           Text="Global normalization target" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="78" />
+                                    </Grid.ColumnDefinitions>
+                                    <Slider x:Name="NormalizationTargetSlider"
+                                            Minimum="-24"
+                                            Maximum="-10"
+                                            Value="-16"
+                                            TickFrequency="0.5"
+                                            IsSnapToTickEnabled="True"
+                                            AutomationProperties.Name="Global normalization target in LUFS" />
+                                    <TextBlock x:Name="NormalizationTargetTextBlock"
+                                               Grid.Column="1"
+                                               Style="{StaticResource ValueTextStyle}"
+                                               Text="-16.0 LUFS" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="SAMPLE-PEAK LIMITER" />
+                                <TextBlock Style="{StaticResource SecondaryTextStyle}"
+                                           Text="The safety limiter prevents excessive peaks in the final output mix." />
+                                <CheckBox x:Name="SafetyLimiterCheckBox"
+                                          Margin="0,14,0,0"
+                                          Content="Enable safety limiter" />
+
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="90" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="78" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               Text="Ceiling" />
+                                    <Slider x:Name="LimiterCeilingSlider"
+                                            Grid.Column="1"
+                                            Minimum="-6"
+                                            Maximum="-0.1"
+                                            Value="-1"
+                                            TickFrequency="0.1"
+                                            IsSnapToTickEnabled="True"
+                                            AutomationProperties.Name="Limiter ceiling in dBFS" />
+                                    <TextBlock x:Name="LimiterCeilingTextBlock"
+                                               Grid.Column="2"
+                                               Style="{StaticResource ValueTextStyle}"
+                                               Text="-1.0 dBFS" />
+                                </Grid>
+
+                                <TextBlock x:Name="LimiterStatusTextBlock"
+                                           Margin="0,14,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Enabled · 5 ms lookahead" />
+                                <TextBlock x:Name="LimiterGainReductionTextBlock"
+                                           Margin="0,6,0,0"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Current gain reduction — Virtual: 0.0 dB · Monitor: 0.0 dB" />
+                                <TextBlock x:Name="LimiterMaximumReductionTextBlock"
+                                           Margin="0,4,0,0"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Maximum gain reduction — Virtual: 0.0 dB · Monitor: 0.0 dB" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ==================== Diagnostics ==================== -->
+            <TabItem Header="Diagnostics">
+                <Grid Margin="20,18">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="125" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="52" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock VerticalAlignment="Center"
+                                   Style="{StaticResource SecondaryTextStyle}"
+                                   Text="Final output peak" />
+                        <ProgressBar x:Name="OutputPeakProgressBar"
+                                     Grid.Column="1"
+                                     Maximum="1"
+                                     AutomationProperties.Name="Final output peak level" />
+                        <TextBlock x:Name="OutputPeakTextBlock"
+                                   Grid.Column="2"
+                                   Style="{StaticResource ValueTextStyle}"
+                                   Text="0%" />
+                    </Grid>
+
+                    <StackPanel Grid.Row="1" Margin="0,14,0,10">
+                        <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                   Text="STORAGE LOCATIONS" />
+                        <TextBox x:Name="StoragePathsTextBox"
+                                 Padding="10,8"
+                                 Style="{StaticResource DiagnosticTextBoxStyle}"
+                                 Text="Loading…"
+                                 TextWrapping="NoWrap"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 AutomationProperties.Name="Storage locations" />
+                    </StackPanel>
+
+                    <TextBox x:Name="DiagnosticStatusTextBox"
+                             Grid.Row="2"
+                             Padding="10,8"
+                             Style="{StaticResource DiagnosticTextBoxStyle}"
+                             Text="Diagnostics are loading."
+                             HorizontalScrollBarVisibility="Auto"
+                             VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="Engine diagnostics" />
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Border Grid.Row="2"
+                Padding="20,12"
+                Background="{StaticResource SidebarBackgroundBrush}"
+                BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="0,1,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock VerticalAlignment="Center"
+                           Style="{StaticResource MutedTextStyle}"
+                           Text="Settings are saved automatically." />
+                <Button x:Name="CloseSettingsButton"
+                        Grid.Column="1"
+                        MinWidth="96"
+                        Content="Close"
+                        IsDefault="True"
+                        Click="CloseSettingsButton_Click"
+                        Style="{StaticResource PrimaryButtonStyle}" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

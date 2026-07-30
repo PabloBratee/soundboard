@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using Soundboard.App.Hotkeys;
 
 namespace Soundboard.App;
@@ -11,8 +12,11 @@ public partial class HotkeyAssignmentDialog : Window
         HotkeyGesture? currentHotkey)
     {
         InitializeComponent();
+        WindowTheme.UseDarkTitleBar(this);
         TargetName = targetName;
         ProposedHotkey = currentHotkey;
+        CurrentHotkeyTextBlock.Text =
+            currentHotkey?.DisplayText ?? "No hotkey";
         ProposedHotkeyTextBlock.Text =
             currentHotkey?.DisplayText ?? "Press a combination…";
         SaveButton.IsEnabled = currentHotkey is not null;
@@ -50,8 +54,9 @@ public partial class HotkeyAssignmentDialog : Window
             or Key.RWin
             or Key.None)
         {
-            ValidationTextBlock.Text =
-                "Press a non-modifier key while holding any modifiers.";
+            SetValidation(
+                "Press a non-modifier key while holding any modifiers.",
+                isProblem: true);
             eventArgs.Handled = true;
             return;
         }
@@ -66,7 +71,9 @@ public partial class HotkeyAssignmentDialog : Window
         {
             ProposedHotkey = null;
             ProposedHotkeyTextBlock.Text = "Invalid combination";
-            ValidationTextBlock.Text = error;
+            SetValidation(
+                error ?? "That combination cannot be used.",
+                isProblem: true);
             SaveButton.IsEnabled = false;
             eventArgs.Handled = true;
             return;
@@ -74,9 +81,9 @@ public partial class HotkeyAssignmentDialog : Window
 
         ProposedHotkey = hotkey;
         ProposedHotkeyTextBlock.Text = hotkey!.DisplayText;
-        ValidationTextBlock.Text =
-            "Proposed combination captured. Select Save to verify it "
-            + "with Windows.";
+        SetValidation(
+            "Available. Select Save to register it with Windows.",
+            isProblem: false);
         SaveButton.IsEnabled = true;
         eventArgs.Handled = true;
     }
@@ -87,8 +94,9 @@ public partial class HotkeyAssignmentDialog : Window
     {
         if (ProposedHotkey is null)
         {
-            ValidationTextBlock.Text =
-                "Capture a valid combination before saving.";
+            SetValidation(
+                "Capture a valid combination before saving.",
+                isProblem: true);
             CaptureArea.Focus();
             return;
         }
@@ -110,6 +118,15 @@ public partial class HotkeyAssignmentDialog : Window
         RoutedEventArgs eventArgs)
     {
         DialogResult = false;
+    }
+
+    private void SetValidation(string message, bool isProblem)
+    {
+        ValidationTextBlock.Text = message;
+        ValidationTextBlock.Foreground =
+            (TryFindResource(isProblem ? "ErrorBrush" : "SuccessBrush")
+                as Brush)
+            ?? ValidationTextBlock.Foreground;
     }
 
     private static HotkeyModifiers ConvertModifiers(
