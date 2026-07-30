@@ -24,7 +24,7 @@ internal static class Program
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
-            $"Soundboard-Milestone8-Tests-{Guid.NewGuid():N}");
+            $"Soundboard-Milestone9-Tests-{Guid.NewGuid():N}");
 
         try
         {
@@ -48,9 +48,13 @@ internal static class Program
             await RunWaveformTestsAsync(
                 Path.Combine(testRoot, "waveforms"));
             RunPreviewSafetyTests();
+            await RunLoudnessAndLimiterTestsAsync(
+                Path.Combine(testRoot, "loudness-limiter"));
+            await RunVersionFiveAndSettingsMigrationTestsAsync(
+                Path.Combine(testRoot, "v5-settings"));
             await RunOptionalLocalFormatTestsAsync(
                 Path.Combine(testRoot, "local-formats"));
-            Console.WriteLine("All Milestone 8 tests passed.");
+            Console.WriteLine("All Milestone 9 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -146,11 +150,11 @@ internal static class Program
                    await File.ReadAllTextAsync(store.LibraryFilePath)))
         {
             AssertEqual(
-                5,
+                6,
                 migratedJson.RootElement
                     .GetProperty("schemaVersion")
                     .GetInt32(),
-                "schema persisted as v5");
+                "schema persisted as v6");
         }
 
         var categoryOne = await store.CreateCategoryAsync("  Effects  ");
@@ -686,7 +690,7 @@ internal static class Program
         Console.WriteLine(
             "PASS Ogg Opus, Ogg Vorbis, .opus, mono/stereo, one-shot EOS, "
             + "invalid/corrupt/multichannel rejection, duplicate detection, "
-            + "schema v5 format persistence, and personalization");
+            + "schema v6 format persistence, and personalization");
     }
 
     private static async Task RunOptionalLocalFormatTestsAsync(string root)
@@ -858,9 +862,9 @@ internal static class Program
                        Path.Combine(root, "library.json"))))
         {
             AssertEqual(
-                5,
+                6,
                 persisted.RootElement.GetProperty("schemaVersion").GetInt32(),
-                "v4 migrated to schema v5");
+                "v4 migrated to schema v6");
         }
 
         await using (var reloadedStore = new SoundLibraryStore(root))
@@ -873,10 +877,41 @@ internal static class Program
             var cachePath = new WaveformCacheService(root)
                 .GetCacheFilePath(hash, 200);
             AssertTrue(File.Exists(cachePath), "waveform cache exists before remove");
+            string analysisCachePath;
+            var libraryBeforeAnalysis = await File.ReadAllTextAsync(
+                reloadedStore.LibraryFilePath);
+            await using (var analysisService =
+                         new LoudnessAnalysisService(root))
+            {
+                var analysisKey = LoudnessAnalysisKey.Create(
+                    reloaded.ContentHash,
+                    reloaded.ClipSettings);
+                var analysis = await analysisService.GetOrAnalyzeAsync(
+                    analysisKey,
+                    managedPath,
+                    reloaded.ClipSettings);
+                AssertTrue(
+                    analysis.Result.IsValid,
+                    "edited sound analysis valid before removal");
+                analysisCachePath =
+                    analysisService.GetCacheFilePath(analysisKey);
+            }
+
+            AssertEqual(
+                libraryBeforeAnalysis,
+                await File.ReadAllTextAsync(
+                    reloadedStore.LibraryFilePath),
+                "analysis generation does not rewrite library JSON");
+            AssertTrue(
+                File.Exists(analysisCachePath),
+                "analysis cache exists before remove");
             var removeWarnings = await reloadedStore.RemoveAsync(soundId);
             AssertEqual(0, removeWarnings.Count, "waveform removal warnings");
             AssertTrue(!File.Exists(managedPath), "managed copy removed");
             AssertTrue(!File.Exists(cachePath), "waveform cache removed");
+            AssertTrue(
+                !File.Exists(analysisCachePath),
+                "analysis cache removed");
         }
 
         var invalidRoot = Path.Combine(root, "invalid");
@@ -934,7 +969,7 @@ internal static class Program
         }
 
         Console.WriteLine(
-            "PASS schema v4-to-v5 migration, clip defaults, invalid metadata "
+            "PASS schema v4-to-v6 migration, clip defaults, invalid metadata "
             + "fallback, persistence, and identity/personalization preservation");
     }
 
@@ -1166,6 +1201,586 @@ internal static class Program
         Console.WriteLine(
             "PASS preview endpoint safety accepts active physical render and "
             + "rejects VB-CABLE and capture endpoints");
+    }
+
+    private static async Task RunLoudnessAndLimiterTestsAsync(string root)
+    {
+        Directory.CreateDirectory(root);
+        const int sampleRate = 48000;
+        var analyzer = new LoudnessAnalyzer();
+        var quietMono = CreateSineSamples(
+            sampleRate, 1, 1.2, 0.1f);
+        var loudMono = CreateSineSamples(
+            sampleRate, 1, 1.2, 0.2f);
+        var stereo = CreateSineSamples(
+            sampleRate, 2, 1.2, 0.1f);
+        var quietResult = analyzer.AnalyzeEffectiveClip(
+            new TestSampleProvider(quietMono, sampleRate, 1),
+            TimeSpan.FromSeconds(1.2));
+        var loudResult = analyzer.AnalyzeEffectiveClip(
+            new TestSampleProvider(loudMono, sampleRate, 1),
+            TimeSpan.FromSeconds(1.2));
+        var stereoResult = analyzer.AnalyzeEffectiveClip(
+            new TestSampleProvider(stereo, sampleRate, 2),
+            TimeSpan.FromSeconds(1.2));
+        AssertTrue(quietResult.IsValid, "mono sine loudness is valid");
+        AssertTrue(stereoResult.IsValid, "stereo sine loudness is valid");
+        AssertTrue(
+            loudResult.IntegratedLoudnessLufs
+                > quietResult.IntegratedLoudnessLufs,
+            "louder sine measures louder");
+        AssertTrue(
+            Math.Abs(
+                loudResult.IntegratedLoudnessLufs
+                - quietResult.IntegratedLoudnessLufs
+                - 6.0206d) < 0.35d,
+            "6 dB amplitude change measures approximately 6 LU");
+        Console.WriteLine(
+            $"INFO deterministic loudness fixtures: quiet "
+            + $"{quietResult.IntegratedLoudnessLufs:N2} LUFS, loud "
+            + $"{loudResult.IntegratedLoudnessLufs:N2} LUFS, stereo "
+            + $"{stereoResult.IntegratedLoudnessLufs:N2} LUFS");
+
+        var silence = analyzer.AnalyzeEffectiveClip(
+            new TestSampleProvider(
+                new float[sampleRate],
+                sampleRate,
+                1),
+            TimeSpan.FromSeconds(1));
+        AssertTrue(!silence.IsValid, "digital silence is non-normalizable");
+        AssertTrue(
+            silence.HasFiniteValues,
+            "invalid analysis retains finite values");
+
+        var changing = new float[sampleRate * 2];
+        Array.Copy(
+            CreateSineSamples(sampleRate, 1, 1, 0.03f),
+            changing,
+            sampleRate);
+        Array.Copy(
+            CreateSineSamples(sampleRate, 1, 1, 0.3f),
+            0,
+            changing,
+            sampleRate,
+            sampleRate);
+        var sourceDuration = TimeSpan.FromSeconds(2);
+        var firstHalf = AudioClipSettings.Create(
+            sourceDuration, 0, 1000, 0, 0);
+        var secondHalf = AudioClipSettings.Create(
+            sourceDuration, 1000, null, 0, 0);
+        var fadedSecondHalf = AudioClipSettings.Create(
+            sourceDuration, 1000, null, 500, 0);
+        var firstResult = AnalyzeEdited(
+            analyzer, changing, sampleRate, firstHalf);
+        var secondResult = AnalyzeEdited(
+            analyzer, changing, sampleRate, secondHalf);
+        var fadedResult = AnalyzeEdited(
+            analyzer, changing, sampleRate, fadedSecondHalf);
+        AssertTrue(
+            secondResult.IntegratedLoudnessLufs
+                > firstResult.IntegratedLoudnessLufs + 10d,
+            "trim changes analysis input");
+        AssertTrue(
+            fadedResult.IntegratedLoudnessLufs
+                < secondResult.IntegratedLoudnessLufs,
+            "fade changes analysis input");
+
+        var boost = LoudnessNormalization.Calculate(
+            ValidAnalysis(-30d),
+            -16d);
+        var cut = LoudnessNormalization.Calculate(
+            ValidAnalysis(10d),
+            -16d);
+        AssertEqual(12d, boost.AppliedGainDb, "+12 dB boost clamp");
+        AssertEqual(-24d, cut.AppliedGainDb, "-24 dB cut clamp");
+        AssertTrue(boost.WasClamped, "boost clamp warning state");
+        AssertTrue(cut.WasClamped, "attenuation clamp warning state");
+        AssertTrue(
+            !LoudnessNormalization.Calculate(silence, -16d).IsAvailable,
+            "invalid analysis never produces gain");
+
+        var formatRoot = Path.Combine(root, "formats");
+        Directory.CreateDirectory(formatRoot);
+        var formatWave = Path.Combine(formatRoot, "tone.wav");
+        var formatMp3 = Path.Combine(formatRoot, "tone.mp3");
+        var formatOpus = Path.Combine(formatRoot, "tone.ogg");
+        var formatOpusExtension = Path.Combine(formatRoot, "tone.opus");
+        var formatVorbis = Path.Combine(formatRoot, "tone-vorbis.ogg");
+        WriteSineWaveFile(formatWave, sampleRate, seconds: 1);
+        using (var waveReader = new WaveFileReader(formatWave))
+        {
+            MediaFoundationEncoder.EncodeToMp3(
+                waveReader,
+                formatMp3,
+                desiredBitRate: 128000);
+        }
+
+        WriteTestOpus(formatOpus, channels: 1, frameCount: sampleRate);
+        WriteTestOpus(
+            formatOpusExtension,
+            channels: 2,
+            frameCount: sampleRate);
+        File.Copy(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "Fixtures",
+                "tiny-vorbis.ogg"),
+            formatVorbis);
+        foreach (var (path, label) in new[]
+                 {
+                     (formatWave, "WAV"),
+                     (formatMp3, "MP3"),
+                     (formatOpus, "Ogg Opus"),
+                     (formatOpusExtension, ".opus"),
+                     (formatVorbis, "Ogg Vorbis")
+                 })
+        {
+            using var decoded =
+                AudioFileDecoderFactory.Default.Open(path);
+            LoudnessAnalysisResult result;
+            if (label == "Ogg Vorbis"
+                && decoded.Duration < TimeSpan.FromMilliseconds(400))
+            {
+                var decodedSamples = ReadAllSamples(decoded.SampleProvider);
+                var repetitions = (int)Math.Ceiling(
+                    sampleRate / (double)decodedSamples.Length);
+                var repeated = Enumerable.Range(0, repetitions)
+                    .SelectMany(_ => decodedSamples)
+                    .Take(sampleRate)
+                    .ToArray();
+                result = analyzer.AnalyzeEffectiveClip(
+                    new TestSampleProvider(repeated, sampleRate, 1),
+                    TimeSpan.FromSeconds(1));
+            }
+            else
+            {
+                var settings =
+                    AudioClipSettings.FullDuration(decoded.Duration);
+                result = analyzer.AnalyzeFile(path, settings);
+            }
+
+            AssertTrue(result.IsValid, $"{label} loudness analysis");
+        }
+
+        var wavePath = Path.Combine(root, "analysis.wav");
+        WriteEditingWave(wavePath, channels: 1);
+        var contentHash = await GetFileHashAsync(wavePath);
+        var fullSettings = AudioClipSettings.FullDuration(
+            TimeSpan.FromSeconds(1));
+        var key = LoudnessAnalysisKey.Create(contentHash, fullSettings);
+        await using (var service = new LoudnessAnalysisService(root))
+        {
+            var requests = Enumerable.Range(0, 6)
+                .Select(
+                    _ => service.GetOrAnalyzeAsync(
+                        key,
+                        wavePath,
+                        fullSettings))
+                .ToArray();
+            var outcomes = await Task.WhenAll(requests);
+            AssertTrue(
+                outcomes.All(outcome => outcome.Result.IsValid),
+                "concurrent analysis results are valid");
+            AssertEqual(
+                1L,
+                service.AnalysisExecutionCount,
+                "identical analysis requests deduplicate");
+            AssertTrue(
+                (await service.TryLoadCachedAsync(key))?.LoadedFromCache
+                    == true,
+                "analysis cache round trip");
+
+            await File.WriteAllTextAsync(
+                service.GetCacheFilePath(key),
+                "{ corrupt");
+            var regenerated = await service.GetOrAnalyzeAsync(
+                key,
+                wavePath,
+                fullSettings);
+            AssertTrue(
+                regenerated.Result.IsValid,
+                "corrupt cache is regenerated");
+            AssertTrue(
+                regenerated.Warning?.Contains(
+                    "corrupt",
+                    StringComparison.OrdinalIgnoreCase) == true,
+                "corrupt cache warning surfaced");
+            AssertEqual(
+                2L,
+                service.AnalysisExecutionCount,
+                "corrupt cache caused one regeneration");
+
+            var trimmedKey = LoudnessAnalysisKey.Create(
+                contentHash,
+                AudioClipSettings.Create(
+                    TimeSpan.FromSeconds(1),
+                    100,
+                    null,
+                    0,
+                    0));
+            AssertTrue(key != trimmedKey, "trim changes analysis key");
+        }
+
+        RunLimiterTests(sampleRate);
+        Console.WriteLine(
+            "PASS loudness mono/stereo, gating, trim/fade sensitivity, "
+            + "gain clamps, cache regeneration/deduplication, and limiter");
+    }
+
+    private static LoudnessAnalysisResult AnalyzeEdited(
+        LoudnessAnalyzer analyzer,
+        float[] source,
+        int sampleRate,
+        AudioClipSettings settings)
+    {
+        return analyzer.AnalyzeEffectiveClip(
+            new AudioClipSampleProvider(
+                new TestSampleProvider(source, sampleRate, 1),
+                settings),
+            settings.EffectiveDuration);
+    }
+
+    private static LoudnessAnalysisResult ValidAnalysis(double lufs)
+    {
+        return new LoudnessAnalysisResult(
+            lufs,
+            -1d,
+            1d,
+            LoudnessAnalyzer.AlgorithmVersion,
+            true,
+            null);
+    }
+
+    private static void RunLimiterTests(int sampleRate)
+    {
+        var below = CreateSineSamples(sampleRate, 1, 0.2, 0.2f);
+        var belowLimiter = new SamplePeakLimiter(
+            new TestSampleProvider(below, sampleRate, 1));
+        var belowOutput = ReadAllSamples(belowLimiter);
+        AssertEqual(below.Length, belowOutput.Length, "limiter mono EOS");
+        var maximumDifference = below.Zip(belowOutput)
+            .Max(pair => Math.Abs(pair.First - pair.Second));
+        AssertTrue(
+            maximumDifference < 0.00001f,
+            $"below-ceiling signal is unchanged ({maximumDifference})");
+
+        var hotStereo = Enumerable.Repeat(
+            1f,
+            sampleRate / 5 * 2).ToArray();
+        var limiter = new SamplePeakLimiter(
+            new TestSampleProvider(hotStereo, sampleRate, 2));
+        var hotOutput = ReadAllSamples(limiter);
+        var ceiling = (float)Math.Pow(10d, -1d / 20d);
+        AssertEqual(hotStereo.Length, hotOutput.Length, "limiter stereo EOS");
+        AssertTrue(
+            hotOutput.All(float.IsFinite),
+            "continuous maximum input remains finite");
+        AssertTrue(
+            hotOutput.Max(Math.Abs) <= ceiling + 0.00001f,
+            "output stays below sample-peak ceiling");
+        AssertTrue(
+            limiter.MaximumGainReductionDb > 0.9f,
+            "above-ceiling signal reports gain reduction");
+        AssertEqual(
+            SamplePeakLimiter.DefaultLookahead,
+            limiter.AddedLatency,
+            "reported limiter latency");
+        Console.WriteLine(
+            $"INFO limiter fixture: ceiling -1.0 dBFS, max reduction "
+            + $"{limiter.MaximumGainReductionDb:N2} dB, latency "
+            + $"{limiter.AddedLatency.TotalMilliseconds:N1} ms");
+
+        var bypassInput = CreateSineSamples(sampleRate, 1, 0.05, 1f);
+        var bypass = new SamplePeakLimiter(
+            new TestSampleProvider(bypassInput, sampleRate, 1),
+            enabled: false);
+        AssertSequence(
+            bypassInput,
+            ReadAllSamples(bypass),
+            "disabled limiter bypass");
+        bypass.CeilingDbfs = -3d;
+        AssertTrue(
+            Math.Abs(bypass.CeilingDbfs + 3d) < 0.0001d,
+            "ceiling update is safe");
+
+        var nonFinite = new SamplePeakLimiter(
+            new TestSampleProvider(
+                [float.NaN, float.PositiveInfinity, 0.5f],
+                sampleRate,
+                1));
+        AssertTrue(
+            ReadAllSamples(nonFinite).All(float.IsFinite),
+            "non-finite input is rejected");
+        AssertEqual(
+            2L,
+            nonFinite.NonFiniteSampleCount,
+            "non-finite diagnostic count");
+
+        var releaseInput = Enumerable.Repeat(1f, sampleRate / 20)
+            .Concat(Enumerable.Repeat(0.1f, sampleRate / 2))
+            .ToArray();
+        var releaseLimiter = new SamplePeakLimiter(
+            new TestSampleProvider(releaseInput, sampleRate, 1));
+        _ = ReadAllSamples(releaseLimiter);
+        AssertTrue(
+            releaseLimiter.MaximumGainReductionDb
+                > releaseLimiter.CurrentGainReductionDb,
+            "limiter release recovers smoothly toward unity");
+
+        var toggleInput = CreateSineSamples(
+            sampleRate,
+            1,
+            0.1,
+            1f);
+        var toggleLimiter = new SamplePeakLimiter(
+            new TestSampleProvider(toggleInput, sampleRate, 1));
+        var firstToggleBuffer = new float[500];
+        var firstToggleRead = toggleLimiter.Read(
+            firstToggleBuffer,
+            0,
+            firstToggleBuffer.Length);
+        toggleLimiter.Enabled = false;
+        var remainingToggleOutput = ReadAllSamples(toggleLimiter);
+        AssertEqual(
+            toggleInput.Length,
+            firstToggleRead + remainingToggleOutput.Length,
+            "runtime limiter bypass preserves bounded queued audio");
+
+        var repeatingLimiter = new SamplePeakLimiter(
+            new RepeatingSampleProvider(sampleRate, channels: 2, 0.2f));
+        var allocationBuffer = new float[2048];
+        _ = repeatingLimiter.Read(
+            allocationBuffer,
+            0,
+            allocationBuffer.Length);
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 50; index++)
+        {
+            _ = repeatingLimiter.Read(
+                allocationBuffer,
+                0,
+                allocationBuffer.Length);
+        }
+
+        var allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
+        AssertEqual(
+            0L,
+            allocatedAfter - allocatedBefore,
+            "limiter steady-state Read allocation");
+    }
+
+    private static async Task RunVersionFiveAndSettingsMigrationTestsAsync(
+        string root)
+    {
+        var libraryRoot = Path.Combine(root, "library");
+        var soundsPath = Path.Combine(libraryRoot, "Sounds");
+        Directory.CreateDirectory(soundsPath);
+        var soundId = Guid.NewGuid();
+        var managedFileName = $"{soundId:N}.wav";
+        var managedPath = Path.Combine(soundsPath, managedFileName);
+        WriteEditingWave(managedPath, channels: 1);
+        var hash = await GetFileHashAsync(managedPath);
+        await WriteJsonAsync(
+            Path.Combine(libraryRoot, "library.json"),
+            new
+            {
+                SchemaVersion = 5,
+                Categories = Array.Empty<object>(),
+                Sounds = new[]
+                {
+                    new
+                    {
+                        Id = soundId,
+                        DisplayName = "Schema five",
+                        ManagedFileName = managedFileName,
+                        OriginalFileName = "source.wav",
+                        FileType = "WAV",
+                        Duration = TimeSpan.FromSeconds(1),
+                        ImportedAtUtc = DateTimeOffset.UtcNow,
+                        SortOrder = 0,
+                        ContentHash = hash,
+                        Container = AudioContainerType.Wav,
+                        Codec = AudioCodecType.Pcm,
+                        OriginalExtension = ".wav"
+                    }
+                }
+            });
+        await using (var store = new SoundLibraryStore(libraryRoot))
+        {
+            var sound = (await store.LoadAsync()).Sounds.Single();
+            AssertTrue(
+                !sound.NormalizeLoudness,
+                "schema v5 defaults normalization disabled");
+            AssertEqual(soundId, sound.Id, "schema v5 ID preserved");
+            AssertEqual(hash, sound.ContentHash, "schema v5 hash preserved");
+        }
+        using (var migratedJson = JsonDocument.Parse(
+                   await File.ReadAllTextAsync(
+                       Path.Combine(libraryRoot, "library.json"))))
+        {
+            AssertEqual(
+                6,
+                migratedJson.RootElement
+                    .GetProperty("schemaVersion")
+                    .GetInt32(),
+                "schema v5 migrates to v6");
+        }
+
+        var invalidRoot = Path.Combine(root, "invalid-normalization");
+        var invalidSoundsPath = Path.Combine(invalidRoot, "Sounds");
+        Directory.CreateDirectory(invalidSoundsPath);
+        File.Copy(
+            managedPath,
+            Path.Combine(invalidSoundsPath, managedFileName));
+        await WriteJsonAsync(
+            Path.Combine(invalidRoot, "library.json"),
+            new
+            {
+                SchemaVersion = 6,
+                Categories = Array.Empty<object>(),
+                Sounds = new[]
+                {
+                    new
+                    {
+                        Id = soundId,
+                        DisplayName = "Invalid normalization",
+                        ManagedFileName = managedFileName,
+                        OriginalFileName = "source.wav",
+                        FileType = "WAV",
+                        Duration = TimeSpan.FromSeconds(1),
+                        ImportedAtUtc = DateTimeOffset.UtcNow,
+                        SortOrder = 0,
+                        ContentHash = hash,
+                        Container = AudioContainerType.Wav,
+                        Codec = AudioCodecType.Pcm,
+                        OriginalExtension = ".wav",
+                        NormalizeLoudness = "invalid"
+                    }
+                }
+            });
+        await using (var store = new SoundLibraryStore(invalidRoot))
+        {
+            var loaded = await store.LoadAsync();
+            AssertTrue(
+                !loaded.Sounds.Single().NormalizeLoudness,
+                "invalid normalization metadata falls back disabled");
+            AssertTrue(
+                loaded.Warnings.Any(
+                    warning => warning.Contains(
+                        "normalization",
+                        StringComparison.OrdinalIgnoreCase)),
+                "invalid normalization warning");
+        }
+
+        var settingsRoot = Path.Combine(root, "settings");
+        await using (var settingsStore =
+                     new ApplicationSettingsStore(settingsRoot))
+        {
+            var defaults = (await settingsStore.LoadAsync()).Settings;
+            AssertEqual(
+                -16d,
+                defaults.NormalizationTargetLufs,
+                "default normalization target");
+            AssertTrue(defaults.SafetyLimiterEnabled, "default limiter on");
+            AssertEqual(
+                -1d,
+                defaults.SafetyLimiterCeilingDbfs,
+                "default limiter ceiling");
+            await settingsStore.SaveAsync(
+                defaults with
+                {
+                    NormalizationTargetLufs = -18.5d,
+                    SafetyLimiterEnabled = false,
+                    SafetyLimiterCeilingDbfs = -2.5d
+                });
+        }
+
+        await using (var settingsStore =
+                     new ApplicationSettingsStore(settingsRoot))
+        {
+            var persisted = (await settingsStore.LoadAsync()).Settings;
+            AssertEqual(
+                -18.5d,
+                persisted.NormalizationTargetLufs,
+                "target persists");
+            AssertTrue(
+                !persisted.SafetyLimiterEnabled,
+                "limiter state persists");
+            AssertEqual(
+                -2.5d,
+                persisted.SafetyLimiterCeilingDbfs,
+                "ceiling persists");
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(settingsRoot, "settings.json"),
+            """
+            {
+              "normalizationTargetLufs": 99,
+              "safetyLimiterEnabled": true,
+              "safetyLimiterCeilingDbfs": -20
+            }
+            """);
+        await using (var settingsStore =
+                     new ApplicationSettingsStore(settingsRoot))
+        {
+            var invalid = await settingsStore.LoadAsync();
+            AssertEqual(
+                -16d,
+                invalid.Settings.NormalizationTargetLufs,
+                "invalid target fallback");
+            AssertEqual(
+                -1d,
+                invalid.Settings.SafetyLimiterCeilingDbfs,
+                "invalid ceiling fallback");
+            AssertTrue(
+                invalid.Warning is not null,
+                "invalid settings warning");
+        }
+
+        Console.WriteLine(
+            "PASS schema v5-to-v6 normalization migration and settings "
+            + "defaults, persistence, and invalid fallback");
+    }
+
+    private static float[] CreateSineSamples(
+        int sampleRate,
+        int channels,
+        double seconds,
+        float amplitude)
+    {
+        var frames = checked((int)Math.Round(sampleRate * seconds));
+        var samples = new float[frames * channels];
+        for (var frame = 0; frame < frames; frame++)
+        {
+            var sample = amplitude * MathF.Sin(
+                2f * MathF.PI * 440f * frame / sampleRate);
+            for (var channel = 0; channel < channels; channel++)
+            {
+                samples[frame * channels + channel] = sample;
+            }
+        }
+
+        return samples;
+    }
+
+    private static void WriteSineWaveFile(
+        string path,
+        int sampleRate,
+        double seconds)
+    {
+        var samples = CreateSineSamples(
+            sampleRate,
+            channels: 1,
+            seconds,
+            amplitude: 0.2f);
+        using var writer = new WaveFileWriter(
+            path,
+            new WaveFormat(sampleRate, 16, channels: 1));
+        foreach (var sample in samples)
+        {
+            writer.WriteSample(sample);
+        }
     }
 
     private static void AssertDecodedTrim(string path, string label)
@@ -1897,6 +2512,30 @@ internal static class Program
             Array.Copy(samples, position, buffer, offset, available);
             position += available;
             return available;
+        }
+    }
+
+    private sealed class RepeatingSampleProvider : ISampleProvider
+    {
+        private readonly float sample;
+
+        public RepeatingSampleProvider(
+            int sampleRate,
+            int channels,
+            float sample)
+        {
+            this.sample = sample;
+            WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(
+                sampleRate,
+                channels);
+        }
+
+        public WaveFormat WaveFormat { get; }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            Array.Fill(buffer, sample, offset, count);
+            return count;
         }
     }
 }

@@ -10,7 +10,7 @@ namespace Soundboard.App.Storage;
 
 public sealed class SoundLibraryStore : IAsyncDisposable
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     public const int MaximumCategoryNameLength = 60;
     public const int MaximumSoundNameLength = 120;
     public const long MaximumImportFileBytes = 1024L * 1024 * 1024;
@@ -22,6 +22,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     private readonly List<SoundCategory> categories = [];
     private readonly Func<CancellationToken, Task>? beforeSaveAsync;
     private readonly WaveformCacheService waveformCacheService;
+    private readonly LoudnessAnalysisService loudnessAnalysisService;
     private bool loaded;
     private bool futureSchemaLoaded;
     private bool disposed;
@@ -38,6 +39,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         SoundsPath = Path.Combine(RootPath, "Sounds");
         LibraryFilePath = Path.Combine(RootPath, "library.json");
         waveformCacheService = new WaveformCacheService(RootPath);
+        loudnessAnalysisService = new LoudnessAnalysisService(RootPath);
         this.beforeSaveAsync = beforeSaveAsync;
     }
 
@@ -124,6 +126,9 @@ public sealed class SoundLibraryStore : IAsyncDisposable
 
             warnings.AddRange(
                 waveformCacheService.CleanupOrphans(
+                    entries.Select(entry => entry.ContentHash)));
+            warnings.AddRange(
+                loudnessAnalysisService.CleanupOrphans(
                     entries.Select(entry => entry.ContentHash)));
 
             return new SoundLibraryLoadResult(
@@ -315,7 +320,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 TrimStartMilliseconds = update.TrimStartMilliseconds,
                 TrimEndMilliseconds = update.TrimEndMilliseconds,
                 FadeInMilliseconds = update.FadeInMilliseconds,
-                FadeOutMilliseconds = update.FadeOutMilliseconds
+                FadeOutMilliseconds = update.FadeOutMilliseconds,
+                NormalizeLoudness = update.NormalizeLoudness
             };
             var updatedEntries = entries.ToList();
             updatedEntries[index] = updated;
@@ -714,8 +720,12 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     deleteException);
             }
 
-            return waveformCacheService.DeleteForContentHash(
-                sound.ContentHash);
+            var cacheWarnings = waveformCacheService.DeleteForContentHash(
+                sound.ContentHash).ToList();
+            cacheWarnings.AddRange(
+                loudnessAnalysisService.DeleteForContentHash(
+                    sound.ContentHash));
+            return cacheWarnings;
         }
         finally
         {
@@ -723,15 +733,14 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (!disposed)
         {
             disposed = true;
             operationGate.Dispose();
+            await loudnessAnalysisService.DisposeAsync();
         }
-
-        return ValueTask.CompletedTask;
     }
 
     private async Task<LibraryReadResult> ReadLibraryAsync(
@@ -997,6 +1006,11 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     serialized,
                     warnings,
                     ref needsSave);
+                var normalizeLoudness = ReadNormalizationEnabled(
+                    serialized.Id,
+                    serialized.NormalizeLoudness,
+                    warnings,
+                    ref needsSave);
 
                 var entry = new SoundLibraryEntry(
                     serialized.Id,
@@ -1018,7 +1032,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     clipSettings.TrimStartMilliseconds,
                     clipSettings.TrimEndMilliseconds,
                     clipSettings.FadeInMilliseconds,
-                    clipSettings.FadeOutMilliseconds);
+                    clipSettings.FadeOutMilliseconds,
+                    normalizeLoudness);
                 ValidateEntry(entry, ids);
                 result.Add(entry);
                 if (hotkey is not null)
@@ -1168,6 +1183,36 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
 
         return parsed;
+    }
+
+    private static bool ReadNormalizationEnabled(
+        Guid soundId,
+        JsonElement? element,
+        ICollection<string> warnings,
+        ref bool needsSave)
+    {
+        if (element is not { } value
+            || value.ValueKind
+                is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return false;
+        }
+
+        if (value.ValueKind == JsonValueKind.True)
+        {
+            return true;
+        }
+
+        if (value.ValueKind == JsonValueKind.False)
+        {
+            return false;
+        }
+
+        warnings.Add(
+            $"Sound {soundId} had an invalid loudness-normalization value "
+            + "and was loaded with normalization disabled.");
+        needsSave = true;
+        return false;
     }
 
     private static int? ReadOptionalNullableNonNegativeInt32(
@@ -1970,5 +2015,6 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         JsonElement? TrimStartMilliseconds,
         JsonElement? TrimEndMilliseconds,
         JsonElement? FadeInMilliseconds,
-        JsonElement? FadeOutMilliseconds);
+        JsonElement? FadeOutMilliseconds,
+        JsonElement? NormalizeLoudness);
 }

@@ -1,4 +1,5 @@
 using Soundboard.App.Hotkeys;
+using Soundboard.Audio;
 
 namespace Soundboard.App.Storage;
 
@@ -23,6 +24,14 @@ public sealed record ApplicationSettings
     public bool GlobalHotkeysEnabled { get; init; } = true;
 
     public HotkeyGesture? StopSoundHotkey { get; init; }
+
+    public double NormalizationTargetLufs { get; init; } =
+        LoudnessNormalizationSettings.DefaultTargetLufs;
+
+    public bool SafetyLimiterEnabled { get; init; } = true;
+
+    public double SafetyLimiterCeilingDbfs { get; init; } =
+        SamplePeakLimiter.DefaultCeilingDbfs;
 
     public double? WindowLeft { get; init; }
 

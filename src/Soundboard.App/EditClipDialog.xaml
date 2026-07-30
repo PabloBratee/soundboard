@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:Soundboard.App"
         Title="Edit clip"
         Width="850"
-        Height="790"
+        Height="900"
         MinWidth="720"
         MinHeight="680"
         ShowInTaskbar="False"
@@ -166,6 +166,91 @@
                            Foreground="#596574"
                            Text="Adjustment buttons use 100 ms. Hold Shift for 10 ms or Ctrl for 1 second. In the waveform, press S or E to select a handle, then use Left or Right with the same modifiers."
                            TextWrapping="Wrap" />
+
+                <Border Margin="0,16,0,0"
+                        Padding="12"
+                        Background="#F8FAFC"
+                        BorderBrush="#D6DBE1"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                    <StackPanel>
+                        <TextBlock FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Text="Loudness" />
+                        <CheckBox x:Name="NormalizeLoudnessCheckBox"
+                                  Margin="0,9,0,0"
+                                  Content="Normalize loudness" />
+                        <TextBlock Margin="0,6,0,0"
+                                   Foreground="#596574"
+                                   Text="Normalization affects sound audio only. It does not change microphone volume or rewrite the audio file."
+                                   TextWrapping="Wrap" />
+                        <Grid Margin="0,11,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="145" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock FontWeight="SemiBold"
+                                       Text="Measured loudness" />
+                            <TextBlock x:Name="MeasuredLoudnessTextBlock"
+                                       Grid.Column="1"
+                                       Text="—" />
+                            <TextBlock Grid.Column="2"
+                                       FontWeight="SemiBold"
+                                       Text="Original sample peak" />
+                            <TextBlock x:Name="SamplePeakTextBlock"
+                                       Grid.Column="3"
+                                       Text="—" />
+                            <TextBlock Grid.Row="1"
+                                       Margin="0,5,0,0"
+                                       FontWeight="SemiBold"
+                                       Text="Global target" />
+                            <TextBlock x:Name="LoudnessTargetTextBlock"
+                                       Grid.Row="1"
+                                       Grid.Column="1"
+                                       Margin="0,5,0,0" />
+                            <TextBlock Grid.Row="1"
+                                       Grid.Column="2"
+                                       Margin="0,5,0,0"
+                                       FontWeight="SemiBold"
+                                       Text="Requested gain" />
+                            <TextBlock x:Name="RequestedGainTextBlock"
+                                       Grid.Row="1"
+                                       Grid.Column="3"
+                                       Margin="0,5,0,0"
+                                       Text="—" />
+                            <TextBlock Grid.Row="2"
+                                       Margin="0,5,0,0"
+                                       FontWeight="SemiBold"
+                                       Text="Applied gain" />
+                            <TextBlock x:Name="AppliedGainTextBlock"
+                                       Grid.Row="2"
+                                       Grid.Column="1"
+                                       Grid.ColumnSpan="3"
+                                       Margin="0,5,0,0"
+                                       Text="—"
+                                       TextWrapping="Wrap" />
+                        </Grid>
+                        <Button x:Name="AnalyzeLoudnessButton"
+                                Margin="0,11,0,0"
+                                Width="150"
+                                Padding="9,5"
+                                HorizontalAlignment="Left"
+                                Click="AnalyzeLoudnessButton_Click"
+                                Content="Analyze loudness" />
+                        <TextBlock x:Name="LoudnessStatusTextBlock"
+                                   Margin="0,7,0,0"
+                                   Foreground="#596574"
+                                   Text="Not analyzed. Analysis runs only when requested."
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
 
                 <StackPanel Margin="0,16,0,0"
                             Orientation="Horizontal">

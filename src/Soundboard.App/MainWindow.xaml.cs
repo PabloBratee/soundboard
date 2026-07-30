@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private readonly SoundLibraryStore soundLibraryStore = new();
     private readonly WaveformCacheService waveformCacheService = new();
     private readonly AudioPreviewService previewService = new();
+    private readonly LoudnessAnalysisService loudnessAnalysisService = new();
     private readonly ApplicationSettingsStore settingsStore = new();
     private readonly ObservableCollection<SoundTileViewModel> soundTiles = [];
     private readonly ObservableCollection<SoundCategory> soundCategories = [];
@@ -59,6 +60,7 @@ public partial class MainWindow : Window
     private Point? soundDragStartPoint;
     private Guid? draggedSoundId;
     private long formatRequestNumber;
+    private long soundTriggerRequestGeneration;
 
     public MainWindow()
     {
@@ -96,6 +98,14 @@ public partial class MainWindow : Window
             GlobalHotkeysCheckBox_Changed;
         GlobalHotkeysCheckBox.Unchecked +=
             GlobalHotkeysCheckBox_Changed;
+        NormalizationTargetSlider.ValueChanged +=
+            NormalizationTargetSlider_ValueChanged;
+        SafetyLimiterCheckBox.Checked +=
+            SafetyLimiterCheckBox_Changed;
+        SafetyLimiterCheckBox.Unchecked +=
+            SafetyLimiterCheckBox_Changed;
+        LimiterCeilingSlider.ValueChanged +=
+            LimiterCeilingSlider_ValueChanged;
 
         audioEngine.StateChanged += AudioEngine_StateChanged;
         audioEngine.ErrorOccurred += AudioEngine_ErrorOccurred;
@@ -157,6 +167,7 @@ public partial class MainWindow : Window
         var settingsResult = await settingsStore.LoadAsync();
         appSettings = settingsResult.Settings;
         ApplySettingsToWindowAndControls();
+        await RefreshCachedAnalysisStatesAsync();
 
         var warnings = new List<string>();
         if (settingsResult.Warning is not null)
@@ -176,6 +187,22 @@ public partial class MainWindow : Window
         StatusTextBlock.Text =
             $"Loaded {soundTiles.Count} sound(s) from the local library.";
         RefreshDiagnosticStatus();
+    }
+
+    private async Task RefreshCachedAnalysisStatesAsync()
+    {
+        foreach (var tile in soundTiles.Where(
+                     candidate => candidate.Sound.NormalizeLoudness))
+        {
+            var key = LoudnessAnalysisKey.Create(
+                tile.Sound.ContentHash,
+                tile.Sound.ClipSettings);
+            var cached = await loudnessAnalysisService.TryLoadCachedAsync(key);
+            if (cached is not null)
+            {
+                tile.SetLoudnessAnalysis(key, cached.Result);
+            }
+        }
     }
 
     private void InitializeGlobalHotkeys()
@@ -242,6 +269,17 @@ public partial class MainWindow : Window
                 appSettings.MonitorVolume * 100d;
             GlobalHotkeysCheckBox.IsChecked =
                 appSettings.GlobalHotkeysEnabled;
+            NormalizationTargetSlider.Value =
+                appSettings.NormalizationTargetLufs;
+            SafetyLimiterCheckBox.IsChecked =
+                appSettings.SafetyLimiterEnabled;
+            LimiterCeilingSlider.Value =
+                appSettings.SafetyLimiterCeilingDbfs;
+            audioEngine.SafetyLimiterEnabled =
+                appSettings.SafetyLimiterEnabled;
+            audioEngine.SafetyLimiterCeilingDbfs =
+                appSettings.SafetyLimiterCeilingDbfs;
+            UpdateLoudnessAndLimiterPresentation();
 
             if (appSettings.WindowWidth is { } width)
             {
@@ -618,6 +656,68 @@ public partial class MainWindow : Window
         ScheduleSettingsSave();
     }
 
+    private void NormalizationTargetSlider_ValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        UpdateLoudnessAndLimiterPresentation();
+        UpdateSettingsFromUi();
+        ScheduleSettingsSave();
+    }
+
+    private void SafetyLimiterCheckBox_Changed(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        audioEngine.SafetyLimiterEnabled =
+            SafetyLimiterCheckBox.IsChecked == true;
+        UpdateLoudnessAndLimiterPresentation();
+        UpdateSettingsFromUi();
+        ScheduleSettingsSave();
+        RefreshDiagnosticStatus();
+    }
+
+    private void LimiterCeilingSlider_ValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        var ceiling = Math.Round(eventArgs.NewValue, 1);
+        audioEngine.SafetyLimiterCeilingDbfs = ceiling;
+        UpdateLoudnessAndLimiterPresentation();
+        UpdateSettingsFromUi();
+        ScheduleSettingsSave();
+        RefreshDiagnosticStatus();
+    }
+
+    private void UpdateLoudnessAndLimiterPresentation()
+    {
+        if (NormalizationTargetTextBlock is null)
+        {
+            return;
+        }
+
+        NormalizationTargetTextBlock.Text =
+            $"{NormalizationTargetSlider.Value:N1} LUFS";
+        LimiterCeilingTextBlock.Text =
+            $"{LimiterCeilingSlider.Value:N1} dBFS";
+        var enabled = SafetyLimiterCheckBox.IsChecked == true;
+        var diagnostics = audioEngine.Diagnostics;
+        LimiterStatusTextBlock.Text = enabled
+            ? $"Enabled · "
+                + $"{(diagnostics?.SafetyLimiterLookahead
+                    ?? SamplePeakLimiter.DefaultLookahead)
+                    .TotalMilliseconds:N0} ms lookahead"
+            : "Disabled · output is bypassing safety limiting";
+        LimiterStatusTextBlock.Foreground = enabled
+            ? Brushes.DarkGreen
+            : Brushes.DarkOrange;
+        LimiterGainReductionTextBlock.Text =
+            $"Virtual: "
+            + $"{diagnostics?.VirtualLimiterCurrentGainReductionDb ?? 0f:N1} dB"
+            + " · Monitor: "
+            + $"{diagnostics?.MonitorLimiterCurrentGainReductionDb ?? 0f:N1} dB";
+    }
+
     private void ImportSoundsButton_Click(
         object sender,
         RoutedEventArgs eventArgs)
@@ -746,6 +846,8 @@ public partial class MainWindow : Window
         Guid soundId,
         SoundTriggerSource source)
     {
+        var requestGeneration = Interlocked.Increment(
+            ref soundTriggerRequestGeneration);
         await soundTriggerGate.WaitAsync();
         try
         {
@@ -815,12 +917,74 @@ public partial class MainWindow : Window
                     return;
                 }
 
+                var normalizationGainDb = 0d;
                 ErrorTextBlock.Text = string.Empty;
+                if (tile.Sound.NormalizeLoudness)
+                {
+                    var key = LoudnessAnalysisKey.Create(
+                        tile.Sound.ContentHash,
+                        tile.Sound.ClipSettings);
+                    var result = tile.MatchingLoudnessAnalysis;
+                    if (result is null)
+                    {
+                        StatusTextBlock.Text =
+                            $"Analyzing loudness for \"{tile.DisplayName}\"…";
+                        var outcome =
+                            await loudnessAnalysisService.GetOrAnalyzeAsync(
+                                key,
+                                managedPath,
+                                tile.Sound.ClipSettings);
+                        tile.SetLoudnessAnalysis(key, outcome.Result);
+                        result = outcome.Result;
+                        if (outcome.Warning is not null)
+                        {
+                            ErrorTextBlock.Text = outcome.Warning;
+                        }
+                    }
+
+                    if (!result.IsValid)
+                    {
+                        var message =
+                            $"\"{tile.DisplayName}\" could not be played with "
+                            + "normalization enabled: "
+                            + (result.InvalidReason
+                                ?? "loudness analysis is invalid.");
+                        ErrorTextBlock.Text = message;
+                        StatusTextBlock.Text =
+                            "The requested sound was not played. The "
+                            + "microphone engine remains active.";
+                        lastDiagnosticMessage = message;
+                        return;
+                    }
+
+                    var calculation = LoudnessNormalization.Calculate(
+                        result,
+                        appSettings.NormalizationTargetLufs);
+                    normalizationGainDb = calculation.AppliedGainDb;
+                    if (calculation.WasClamped)
+                    {
+                        ErrorTextBlock.Text =
+                            $"Normalization for \"{tile.DisplayName}\" was "
+                            + $"clamped from "
+                            + $"{calculation.RequestedGainDb:+0.0;-0.0;0.0} dB "
+                            + $"to "
+                            + $"{calculation.AppliedGainDb:+0.0;-0.0;0.0} dB.";
+                    }
+                }
+
+                if (requestGeneration
+                        != Interlocked.Read(ref soundTriggerRequestGeneration)
+                    || isClosing)
+                {
+                    return;
+                }
+
                 await Task.Run(
                     () => audioEngine.PlaySound(
                         tile.Id,
                         managedPath,
-                        tile.Sound.ClipSettings));
+                        tile.Sound.ClipSettings,
+                        normalizationGainDb));
 
                 if (audioEngine.CurrentSoundId == tile.Id)
                 {
@@ -853,6 +1017,7 @@ public partial class MainWindow : Window
 
     private async Task StopCurrentSoundAsync(SoundTriggerSource source)
     {
+        Interlocked.Increment(ref soundTriggerRequestGeneration);
         await soundTriggerGate.WaitAsync();
         try
         {
@@ -1391,12 +1556,18 @@ public partial class MainWindow : Window
             soundLibraryStore.GetManagedFilePath(tile.Sound),
             waveformCacheService,
             previewService,
+            loudnessAnalysisService,
             previewEndpoint,
-            previewAvailabilityMessage)
+            previewAvailabilityMessage,
+            appSettings.NormalizationTargetLufs,
+            appSettings.SafetyLimiterEnabled,
+            appSettings.SafetyLimiterCeilingDbfs)
         {
             Owner = this
         };
-        if (dialog.ShowDialog() != true
+        var accepted = dialog.ShowDialog() == true;
+        RefreshDiagnosticStatus();
+        if (!accepted
             || dialog.ProposedUpdate is not { } proposedUpdate)
         {
             return;
@@ -1422,6 +1593,12 @@ public partial class MainWindow : Window
             tile.ReplaceSound(
                 updated,
                 GetCategoryName(updated.CategoryId));
+            if (dialog.SavedAnalysisOutcome is { } savedAnalysis)
+            {
+                tile.SetLoudnessAnalysis(
+                    savedAnalysis.Key,
+                    savedAnalysis.Result);
+            }
             ErrorTextBlock.Text = string.Empty;
             StatusTextBlock.Text =
                 $"Saved non-destructive clip settings for "
@@ -2112,6 +2289,7 @@ public partial class MainWindow : Window
                     Math.Clamp(eventArgs.MonitorOutputPeak, 0f, 1f);
                 MonitorPeakTextBlock.Text =
                     $"{eventArgs.MonitorOutputPeak:P0}";
+                UpdateLoudnessAndLimiterPresentation();
             });
     }
 
@@ -2682,6 +2860,12 @@ public partial class MainWindow : Window
                 + $"{YesNo(MonitorSoundsCheckBox.IsChecked == true)}",
             $"Global hotkeys enabled: "
                 + $"{YesNo(appSettings.GlobalHotkeysEnabled)}",
+            $"Normalization target: "
+                + $"{appSettings.NormalizationTargetLufs:N1} LUFS",
+            $"Safety limiter enabled: "
+                + $"{YesNo(appSettings.SafetyLimiterEnabled)}",
+            $"Safety limiter ceiling: "
+                + $"{appSettings.SafetyLimiterCeilingDbfs:N1} dBFS",
             $"Assigned sound hotkeys: "
                 + $"{soundTiles.Count(tile => tile.Sound.Hotkey is not null)}",
             $"Registered sound hotkeys: "
@@ -2762,6 +2946,30 @@ public partial class MainWindow : Window
                 $"- Microphone buffer capacity: "
                 + $"{engineDiagnostics.MicrophoneBufferCapacity.TotalMilliseconds:N0} ms");
             lines.Add(
+                $"- Safety limiter: "
+                + $"{(engineDiagnostics.SafetyLimiterEnabled
+                    ? "Enabled"
+                    : "Disabled")}");
+            lines.Add(
+                $"- Limiter ceiling: "
+                + $"{engineDiagnostics.SafetyLimiterCeilingDbfs:N1} dBFS");
+            lines.Add(
+                $"- Limiter lookahead: "
+                + $"{engineDiagnostics.SafetyLimiterLookahead.TotalMilliseconds:N1} ms");
+            lines.Add(
+                $"- Virtual limiter gain reduction current/max: "
+                + $"{engineDiagnostics.VirtualLimiterCurrentGainReductionDb:N1}"
+                + "/"
+                + $"{engineDiagnostics.VirtualLimiterMaximumGainReductionDb:N1} dB");
+            lines.Add(
+                $"- Monitor limiter gain reduction current/max: "
+                + $"{engineDiagnostics.MonitorLimiterCurrentGainReductionDb:N1}"
+                + "/"
+                + $"{engineDiagnostics.MonitorLimiterMaximumGainReductionDb:N1} dB");
+            lines.Add(
+                $"- Limiter non-finite samples rejected: "
+                + $"{engineDiagnostics.LimiterNonFiniteSampleCount}");
+            lines.Add(
                 $"- Monitoring enabled for engine session: "
                 + $"{YesNo(engineDiagnostics.MonitoringEnabled)}");
             lines.Add(
@@ -2804,6 +3012,13 @@ public partial class MainWindow : Window
         lines.Add(
             $"- Microphone buffer overflows: "
             + $"{audioEngine.MicrophoneBufferOverflowCount}");
+        lines.Add(
+            $"- Preview limiter gain reduction current/max: "
+            + $"{previewService.CurrentGainReductionDb:N1}/"
+            + $"{previewService.MaximumGainReductionDb:N1} dB");
+        lines.Add(
+            $"- Preview limiter non-finite samples rejected: "
+            + $"{previewService.NonFiniteSampleCount}");
         lines.Add($"- Last error/diagnostic: {lastDiagnosticMessage}");
 
         if (currentSnapshot?.Warnings.Count > 0)
@@ -2889,6 +3104,12 @@ public partial class MainWindow : Window
             MonitorVolume = MonitorVolumeSlider.Value / 100d,
             GlobalHotkeysEnabled =
                 GlobalHotkeysCheckBox.IsChecked == true,
+            NormalizationTargetLufs =
+                NormalizationTargetSlider.Value,
+            SafetyLimiterEnabled =
+                SafetyLimiterCheckBox.IsChecked == true,
+            SafetyLimiterCeilingDbfs =
+                Math.Round(LimiterCeilingSlider.Value, 1),
             MicrophoneVolume = MicrophoneVolumeSlider.Value / 100d,
             MicrophoneMuted =
                 MuteMicrophoneCheckBox.IsChecked == true,
@@ -2986,6 +3207,17 @@ public partial class MainWindow : Window
         settingsSaveDelayCancellation = null;
 
         var shutdownErrors = new List<string>();
+
+        try
+        {
+            await loudnessAnalysisService.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            shutdownErrors.Add(
+                "Loudness analysis could not be stopped cleanly: "
+                + exception.Message);
+        }
 
         try
         {

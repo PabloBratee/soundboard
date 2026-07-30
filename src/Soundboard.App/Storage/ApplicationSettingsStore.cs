@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using Soundboard.App.Hotkeys;
+using Soundboard.Audio;
 
 namespace Soundboard.App.Storage;
 
@@ -141,21 +142,45 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
         ApplicationSettings settings,
         out string? warning)
     {
+        var warnings = new List<string>();
         HotkeyGesture? stopSoundHotkey = null;
         if (!HotkeyGesture.TryNormalize(
                 settings.StopSoundHotkey,
                 out stopSoundHotkey,
                 out var hotkeyError))
         {
-            warning =
+            warnings.Add(
                 "The saved Stop Sound hotkey is invalid and was ignored: "
-                + hotkeyError;
-        }
-        else
-        {
-            warning = null;
+                + hotkeyError);
         }
 
+        var targetLufs = settings.NormalizationTargetLufs;
+        if (!double.IsFinite(targetLufs)
+            || targetLufs
+                < LoudnessNormalizationSettings.MinimumTargetLufs
+            || targetLufs
+                > LoudnessNormalizationSettings.MaximumTargetLufs)
+        {
+            targetLufs = LoudnessNormalizationSettings.DefaultTargetLufs;
+            warnings.Add(
+                "The saved loudness target was invalid and was reset to "
+                + "-16 LUFS.");
+        }
+
+        var limiterCeiling = settings.SafetyLimiterCeilingDbfs;
+        if (!double.IsFinite(limiterCeiling)
+            || limiterCeiling < SamplePeakLimiter.MinimumCeilingDbfs
+            || limiterCeiling > SamplePeakLimiter.MaximumCeilingDbfs)
+        {
+            limiterCeiling = SamplePeakLimiter.DefaultCeilingDbfs;
+            warnings.Add(
+                "The saved safety-limiter ceiling was invalid and was reset "
+                + "to -1.0 dBFS.");
+        }
+
+        warning = warnings.Count == 0
+            ? null
+            : string.Join(" ", warnings);
         return settings with
         {
             MicrophoneVolume = Math.Clamp(
@@ -165,6 +190,8 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
             SoundVolume = Math.Clamp(settings.SoundVolume, 0d, 2d),
             MonitorVolume = Math.Clamp(settings.MonitorVolume, 0d, 2d),
             StopSoundHotkey = stopSoundHotkey,
+            NormalizationTargetLufs = targetLufs,
+            SafetyLimiterCeilingDbfs = limiterCeiling,
             WindowWidth = ValidateDimension(
                 settings.WindowWidth,
                 minimum: 760d),

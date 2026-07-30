@@ -24,7 +24,8 @@ public sealed record SoundLibraryEntry(
     int TrimStartMilliseconds = 0,
     int? TrimEndMilliseconds = null,
     int FadeInMilliseconds = 0,
-    int FadeOutMilliseconds = 0)
+    int FadeOutMilliseconds = 0,
+    bool NormalizeLoudness = false)
 {
     [JsonIgnore]
     public string FormatLabel => new AudioFileFormat(

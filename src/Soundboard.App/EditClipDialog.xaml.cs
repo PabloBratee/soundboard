@@ -12,8 +12,14 @@ public partial class EditClipDialog : Window
     private readonly string managedPath;
     private readonly WaveformCacheService waveformCacheService;
     private readonly AudioPreviewService previewService;
+    private readonly LoudnessAnalysisService loudnessAnalysisService;
     private readonly AudioEndpoint? previewEndpoint;
+    private readonly double normalizationTargetLufs;
+    private readonly bool limiterEnabled;
+    private readonly double limiterCeilingDbfs;
     private readonly CancellationTokenSource lifetimeCancellation = new();
+    private LoudnessAnalysisOutcome? analysisOutcome;
+    private bool analysisInProgress;
     private bool closed;
 
     public EditClipDialog(
@@ -21,20 +27,29 @@ public partial class EditClipDialog : Window
         string managedPath,
         WaveformCacheService waveformCacheService,
         AudioPreviewService previewService,
+        LoudnessAnalysisService loudnessAnalysisService,
         AudioEndpoint? previewEndpoint,
-        string previewAvailabilityMessage)
+        string previewAvailabilityMessage,
+        double normalizationTargetLufs,
+        bool limiterEnabled,
+        double limiterCeilingDbfs)
     {
         ArgumentNullException.ThrowIfNull(sound);
         ArgumentException.ThrowIfNullOrWhiteSpace(managedPath);
         ArgumentNullException.ThrowIfNull(waveformCacheService);
         ArgumentNullException.ThrowIfNull(previewService);
+        ArgumentNullException.ThrowIfNull(loudnessAnalysisService);
         InitializeComponent();
 
         this.sound = sound;
         this.managedPath = managedPath;
         this.waveformCacheService = waveformCacheService;
         this.previewService = previewService;
+        this.loudnessAnalysisService = loudnessAnalysisService;
         this.previewEndpoint = previewEndpoint;
+        this.normalizationTargetLufs = normalizationTargetLufs;
+        this.limiterEnabled = limiterEnabled;
+        this.limiterCeilingDbfs = limiterCeilingDbfs;
         SoundNameTextBlock.Text = sound.DisplayName;
         OriginalFileNameTextBlock.Text = sound.OriginalFileName;
         FormatTextBlock.Text = sound.FormatLabel;
@@ -50,6 +65,13 @@ public partial class EditClipDialog : Window
             sound.FadeInMilliseconds,
             sound.FadeOutMilliseconds);
         WaveformEditor.ValuesChanged += WaveformEditor_ValuesChanged;
+        NormalizeLoudnessCheckBox.IsChecked = sound.NormalizeLoudness;
+        NormalizeLoudnessCheckBox.Checked +=
+            NormalizeLoudnessCheckBox_Changed;
+        NormalizeLoudnessCheckBox.Unchecked +=
+            NormalizeLoudnessCheckBox_Changed;
+        LoudnessTargetTextBlock.Text =
+            $"{normalizationTargetLufs:N1} LUFS";
         previewService.PreviewFailed += PreviewService_PreviewFailed;
         Loaded += EditClipDialog_Loaded;
         Closed += EditClipDialog_Closed;
@@ -58,12 +80,15 @@ public partial class EditClipDialog : Window
 
     public SoundClipMetadataUpdate? ProposedUpdate { get; private set; }
 
+    public LoudnessAnalysisOutcome? SavedAnalysisOutcome { get; private set; }
+
     private async void EditClipDialog_Loaded(
         object sender,
         RoutedEventArgs eventArgs)
     {
         try
         {
+            await LoadCachedAnalysisAsync();
             var result = await waveformCacheService.GetOrCreateAsync(
                 managedPath,
                 sound.ContentHash,
@@ -112,6 +137,23 @@ public partial class EditClipDialog : Window
             }
 
             var settings = CreateProposedSettings();
+            var normalizationGainDb = 0d;
+            if (NormalizeLoudnessCheckBox.IsChecked == true)
+            {
+                var outcome = await EnsureMatchingAnalysisAsync();
+                if (!outcome.Result.IsValid)
+                {
+                    throw new InvalidOperationException(
+                        outcome.Result.InvalidReason
+                        ?? "Loudness analysis is not valid.");
+                }
+
+                var calculation = LoudnessNormalization.Calculate(
+                    outcome.Result,
+                    normalizationTargetLufs);
+                normalizationGainDb = calculation.AppliedGainDb;
+            }
+
             PreviewStatusTextBlock.Text =
                 $"Starting local-only preview on "
                 + $"{previewEndpoint.FriendlyName}…";
@@ -120,6 +162,9 @@ public partial class EditClipDialog : Window
                 managedPath,
                 settings,
                 previewEndpoint,
+                normalizationGainDb,
+                limiterEnabled,
+                limiterCeilingDbfs,
                 lifetimeCancellation.Token);
             PreviewStatusTextBlock.Text =
                 $"Playing once through {previewEndpoint.FriendlyName}. "
@@ -174,7 +219,23 @@ public partial class EditClipDialog : Window
                         ? null
                         : WaveformEditor.TrimEndMilliseconds,
                 WaveformEditor.FadeInMilliseconds,
-                WaveformEditor.FadeOutMilliseconds);
+                WaveformEditor.FadeOutMilliseconds,
+                NormalizeLoudnessCheckBox.IsChecked == true);
+            if (NormalizeLoudnessCheckBox.IsChecked == true)
+            {
+                var key = LoudnessAnalysisKey.Create(
+                    sound.ContentHash,
+                    settings);
+                if (analysisOutcome?.Key != key
+                    || analysisOutcome.Result.IsValid != true)
+                {
+                    throw new InvalidOperationException(
+                        "Analyze the current trim and fade settings before "
+                        + "saving with loudness normalization enabled.");
+                }
+
+                SavedAnalysisOutcome = analysisOutcome;
+            }
             _ = settings;
             previewService.Stop();
             DialogResult = true;
@@ -205,6 +266,10 @@ public partial class EditClipDialog : Window
         previewService.Stop();
         previewService.PreviewFailed -= PreviewService_PreviewFailed;
         WaveformEditor.ValuesChanged -= WaveformEditor_ValuesChanged;
+        NormalizeLoudnessCheckBox.Checked -=
+            NormalizeLoudnessCheckBox_Changed;
+        NormalizeLoudnessCheckBox.Unchecked -=
+            NormalizeLoudnessCheckBox_Changed;
         lifetimeCancellation.Dispose();
     }
 
@@ -233,6 +298,192 @@ public partial class EditClipDialog : Window
         EventArgs eventArgs)
     {
         UpdateValueText();
+        UpdateLoudnessPresentation();
+    }
+
+    private async void AnalyzeLoudnessButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        try
+        {
+            await AnalyzeProposedAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Closing the editor cancels analysis.
+        }
+        catch (Exception exception)
+        {
+            LoudnessStatusTextBlock.Text =
+                $"Loudness analysis failed: {exception.Message}";
+            LoudnessStatusTextBlock.Foreground = Brushes.DarkRed;
+        }
+    }
+
+    private async void NormalizeLoudnessCheckBox_Changed(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        UpdateLoudnessPresentation();
+        if (NormalizeLoudnessCheckBox.IsChecked == true
+            && !HasMatchingValidAnalysis())
+        {
+            try
+            {
+                await AnalyzeProposedAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                // Closing the editor cancels analysis.
+            }
+            catch (Exception exception)
+            {
+                LoudnessStatusTextBlock.Text =
+                    $"Loudness analysis failed: {exception.Message}";
+                LoudnessStatusTextBlock.Foreground = Brushes.DarkRed;
+            }
+        }
+    }
+
+    private async Task LoadCachedAnalysisAsync()
+    {
+        var key = LoudnessAnalysisKey.Create(
+            sound.ContentHash,
+            CreateProposedSettings());
+        analysisOutcome = await loudnessAnalysisService.TryLoadCachedAsync(
+            key,
+            lifetimeCancellation.Token);
+        if (!closed)
+        {
+            UpdateLoudnessPresentation();
+        }
+    }
+
+    private async Task<LoudnessAnalysisOutcome> EnsureMatchingAnalysisAsync()
+    {
+        if (HasMatchingAnalysis())
+        {
+            return analysisOutcome!;
+        }
+
+        return await AnalyzeProposedAsync();
+    }
+
+    private async Task<LoudnessAnalysisOutcome> AnalyzeProposedAsync()
+    {
+        if (analysisInProgress)
+        {
+            throw new InvalidOperationException(
+                "Loudness analysis is already running.");
+        }
+
+        var settings = CreateProposedSettings();
+        var key = LoudnessAnalysisKey.Create(sound.ContentHash, settings);
+        analysisInProgress = true;
+        AnalyzeLoudnessButton.IsEnabled = false;
+        LoudnessStatusTextBlock.Text =
+            "Analyzing the effective trimmed and faded clip…";
+        LoudnessStatusTextBlock.Foreground = Brushes.DimGray;
+        try
+        {
+            var outcome = await loudnessAnalysisService.GetOrAnalyzeAsync(
+                key,
+                managedPath,
+                settings,
+                lifetimeCancellation.Token);
+            if (closed)
+            {
+                throw new OperationCanceledException();
+            }
+
+            analysisOutcome = outcome;
+            UpdateLoudnessPresentation();
+            return outcome;
+        }
+        finally
+        {
+            analysisInProgress = false;
+            if (!closed)
+            {
+                AnalyzeLoudnessButton.IsEnabled = true;
+            }
+        }
+    }
+
+    private bool HasMatchingAnalysis()
+    {
+        return analysisOutcome?.Key == LoudnessAnalysisKey.Create(
+            sound.ContentHash,
+            CreateProposedSettings());
+    }
+
+    private bool HasMatchingValidAnalysis()
+    {
+        return HasMatchingAnalysis()
+            && analysisOutcome?.Result.IsValid == true;
+    }
+
+    private void UpdateLoudnessPresentation()
+    {
+        if (analysisInProgress)
+        {
+            return;
+        }
+
+        AnalyzeLoudnessButton.Content = analysisOutcome is null
+            ? "Analyze loudness"
+            : "Reanalyze";
+        if (!HasMatchingAnalysis())
+        {
+            LoudnessStatusTextBlock.Text = analysisOutcome is null
+                ? "Not analyzed. Analysis runs only when requested."
+                : "Analysis is stale because trim or fade settings changed.";
+            LoudnessStatusTextBlock.Foreground = analysisOutcome is null
+                ? Brushes.DimGray
+                : Brushes.DarkOrange;
+            MeasuredLoudnessTextBlock.Text = "—";
+            SamplePeakTextBlock.Text = "—";
+            RequestedGainTextBlock.Text = "—";
+            AppliedGainTextBlock.Text = "—";
+            return;
+        }
+
+        var result = analysisOutcome!.Result;
+        if (!result.IsValid)
+        {
+            LoudnessStatusTextBlock.Text =
+                result.InvalidReason ?? "The clip cannot be normalized.";
+            LoudnessStatusTextBlock.Foreground = Brushes.DarkRed;
+            MeasuredLoudnessTextBlock.Text = "Unavailable";
+            SamplePeakTextBlock.Text =
+                $"{result.MaximumSamplePeakDbfs:N1} dBFS";
+            RequestedGainTextBlock.Text = "—";
+            AppliedGainTextBlock.Text = "—";
+            return;
+        }
+
+        var calculation = LoudnessNormalization.Calculate(
+            result,
+            normalizationTargetLufs);
+        LoudnessStatusTextBlock.Text = analysisOutcome.Warning
+            ?? (analysisOutcome.LoadedFromCache
+                ? "Loaded matching analysis from the local cache."
+                : "Analysis completed and was cached locally.");
+        LoudnessStatusTextBlock.Foreground = analysisOutcome.Warning is null
+            ? Brushes.DarkGreen
+            : Brushes.DarkOrange;
+        MeasuredLoudnessTextBlock.Text =
+            $"{result.IntegratedLoudnessLufs:N1} LUFS";
+        SamplePeakTextBlock.Text =
+            $"{result.MaximumSamplePeakDbfs:N1} dBFS";
+        RequestedGainTextBlock.Text =
+            $"{calculation.RequestedGainDb:+0.0;-0.0;0.0} dB";
+        AppliedGainTextBlock.Text =
+            $"{calculation.AppliedGainDb:+0.0;-0.0;0.0} dB"
+            + (calculation.WasClamped
+                ? " (clamped; target cannot be reached)"
+                : string.Empty);
     }
 
     private void TrimStartEarlierButton_Click(

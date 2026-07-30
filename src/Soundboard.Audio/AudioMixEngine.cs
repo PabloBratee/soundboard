@@ -22,6 +22,9 @@ public sealed class AudioMixEngine : IDisposable
     private float soundVolume = 1f;
     private float monitorVolume = 1f;
     private bool microphoneMuted;
+    private bool safetyLimiterEnabled = true;
+    private double safetyLimiterCeilingDbfs =
+        SamplePeakLimiter.DefaultCeilingDbfs;
     private bool disposed;
     private int stateValue = (int)AudioEngineState.Stopped;
     private int faultCleanupQueued;
@@ -157,6 +160,75 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
+    public bool SafetyLimiterEnabled
+    {
+        get
+        {
+            lock (lifecycleLock)
+            {
+                return safetyLimiterEnabled;
+            }
+        }
+
+        set
+        {
+            lock (lifecycleLock)
+            {
+                ThrowIfDisposed();
+                safetyLimiterEnabled = value;
+                if (resources is { } pipeline)
+                {
+                    pipeline.VirtualLimiter.Enabled = value;
+                    if (pipeline.Monitor is { } monitor)
+                    {
+                        monitor.Limiter.Enabled = value;
+                    }
+
+                    UpdateLimiterDiagnostics(pipeline);
+                }
+            }
+        }
+    }
+
+    public double SafetyLimiterCeilingDbfs
+    {
+        get
+        {
+            lock (lifecycleLock)
+            {
+                return safetyLimiterCeilingDbfs;
+            }
+        }
+
+        set
+        {
+            if (!double.IsFinite(value)
+                || value < SamplePeakLimiter.MinimumCeilingDbfs
+                || value > SamplePeakLimiter.MaximumCeilingDbfs)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    "The limiter ceiling must be between -6.0 and -0.1 dBFS.");
+            }
+
+            lock (lifecycleLock)
+            {
+                ThrowIfDisposed();
+                safetyLimiterCeilingDbfs = value;
+                if (resources is { } pipeline)
+                {
+                    pipeline.VirtualLimiter.CeilingDbfs = value;
+                    if (pipeline.Monitor is { } monitor)
+                    {
+                        monitor.Limiter.CeilingDbfs = value;
+                    }
+
+                    UpdateLimiterDiagnostics(pipeline);
+                }
+            }
+        }
+    }
+
     public void Start(
         string microphoneEndpointId,
         string renderEndpointId,
@@ -250,7 +322,8 @@ public sealed class AudioMixEngine : IDisposable
     public void PlaySound(
         Guid soundId,
         string filePath,
-        AudioClipSettings clipSettings)
+        AudioClipSettings clipSettings,
+        double normalizationGainDb = 0d)
     {
         if (soundId == Guid.Empty)
         {
@@ -261,6 +334,19 @@ public sealed class AudioMixEngine : IDisposable
 
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentNullException.ThrowIfNull(clipSettings);
+        if (!double.IsFinite(normalizationGainDb)
+            || normalizationGainDb
+                < LoudnessNormalizationSettings.MaximumAttenuationDb
+            || normalizationGainDb
+                > LoudnessNormalizationSettings.MaximumBoostDb)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(normalizationGainDb),
+                "Normalization gain must be between -24 and +12 dB.");
+        }
+
+        var normalizationGain =
+            (float)Math.Pow(10d, normalizationGainDb / 20d);
 
         lock (lifecycleLock)
         {
@@ -287,7 +373,8 @@ public sealed class AudioMixEngine : IDisposable
                     clipSettings,
                     decoderFactory,
                     resources.TargetFormat,
-                    soundVolume);
+                    soundVolume,
+                    normalizationGain);
 
                 currentSound = session;
                 resources.Mixer.AddMixerInput(session.VirtualBranch);
@@ -302,7 +389,8 @@ public sealed class AudioMixEngine : IDisposable
                             clipSettings,
                             decoderFactory,
                             resources.Monitor.TargetFormat,
-                            monitorVolume);
+                            monitorVolume,
+                            normalizationGain);
                         session.AttachMonitorBranch(monitorBranch);
                         resources.Monitor.Mixer.AddMixerInput(monitorBranch);
                     }
@@ -474,8 +562,12 @@ public sealed class AudioMixEngine : IDisposable
             mixer.AddMixerInput(microphoneMeter);
             mixer.MixerInputEnded += Mixer_MixerInputEnded;
 
-            var outputMeter = new MeteringSampleProvider(
+            var virtualLimiter = new SamplePeakLimiter(
                 mixer,
+                safetyLimiterEnabled,
+                safetyLimiterCeilingDbfs);
+            var outputMeter = new MeteringSampleProvider(
+                virtualLimiter,
                 GetSamplesPerNotification(targetFormat));
 
             output = new WasapiOut(
@@ -499,6 +591,9 @@ public sealed class AudioMixEngine : IDisposable
                 microphoneChannelConversionActive,
                 MicrophoneBufferCapacity)
             {
+                SafetyLimiterEnabled = safetyLimiterEnabled,
+                SafetyLimiterCeilingDbfs = safetyLimiterCeilingDbfs,
+                SafetyLimiterLookahead = virtualLimiter.AddedLatency,
                 MonitoringEnabled = monitorConfiguration.Enabled,
                 MonitorEndpointId = monitorConfiguration.EndpointId,
                 MonitorInitializationStatus = monitorConfiguration.Enabled
@@ -515,6 +610,7 @@ public sealed class AudioMixEngine : IDisposable
                 microphoneVolumeProvider,
                 microphoneMeter,
                 mixer,
+                virtualLimiter,
                 outputMeter,
                 targetFormat,
                 pipelineDiagnostics);
@@ -601,7 +697,7 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
-    private static MonitorPipelineResources CreateMonitorPipeline(
+    private MonitorPipelineResources CreateMonitorPipeline(
         MMDeviceEnumerator enumerator,
         string monitorEndpointId,
         string virtualRenderEndpointId)
@@ -653,8 +749,12 @@ public sealed class AudioMixEngine : IDisposable
             {
                 ReadFully = true
             };
-            var monitorMeter = new MeteringSampleProvider(
+            var monitorLimiter = new SamplePeakLimiter(
                 monitorMixer,
+                safetyLimiterEnabled,
+                safetyLimiterCeilingDbfs);
+            var monitorMeter = new MeteringSampleProvider(
+                monitorLimiter,
                 GetSamplesPerNotification(monitorTargetFormat));
 
             monitorOutput = new WasapiOut(
@@ -668,6 +768,7 @@ public sealed class AudioMixEngine : IDisposable
                 monitorDevice,
                 monitorOutput,
                 monitorMixer,
+                monitorLimiter,
                 monitorMeter,
                 monitorMixFormat,
                 monitorTargetFormat);
@@ -872,6 +973,11 @@ public sealed class AudioMixEngine : IDisposable
             Volatile.Write(
                 ref mixedOutputPeak,
                 GetPeak(eventArgs.MaxSampleValues));
+            if (resources is { } pipeline)
+            {
+                UpdateLimiterDiagnostics(pipeline);
+            }
+
             RaisePeakLevelsChanged();
         }
         catch (Exception exception)
@@ -897,14 +1003,11 @@ public sealed class AudioMixEngine : IDisposable
 
             var peak = GetPeak(eventArgs.MaxSampleValues);
             Volatile.Write(ref monitorOutputPeak, peak);
-            var currentDiagnostics = diagnostics;
-            if (currentDiagnostics is not null)
+            pipeline.Diagnostics = pipeline.Diagnostics with
             {
-                diagnostics = currentDiagnostics with
-                {
-                    MonitorPeak = peak
-                };
-            }
+                MonitorPeak = peak
+            };
+            UpdateLimiterDiagnostics(pipeline);
 
             RaisePeakLevelsChanged();
         }
@@ -1228,6 +1331,31 @@ public sealed class AudioMixEngine : IDisposable
         diagnostics = resources.Diagnostics;
     }
 
+    private void UpdateLimiterDiagnostics(AudioPipelineResources pipeline)
+    {
+        var monitorLimiter = pipeline.Monitor?.Limiter;
+        pipeline.Diagnostics = pipeline.Diagnostics with
+        {
+            SafetyLimiterEnabled = pipeline.VirtualLimiter.Enabled,
+            SafetyLimiterCeilingDbfs =
+                pipeline.VirtualLimiter.CeilingDbfs,
+            SafetyLimiterLookahead =
+                pipeline.VirtualLimiter.AddedLatency,
+            VirtualLimiterCurrentGainReductionDb =
+                pipeline.VirtualLimiter.CurrentGainReductionDb,
+            VirtualLimiterMaximumGainReductionDb =
+                pipeline.VirtualLimiter.MaximumGainReductionDb,
+            MonitorLimiterCurrentGainReductionDb =
+                monitorLimiter?.CurrentGainReductionDb ?? 0f,
+            MonitorLimiterMaximumGainReductionDb =
+                monitorLimiter?.MaximumGainReductionDb ?? 0f,
+            LimiterNonFiniteSampleCount =
+                pipeline.VirtualLimiter.NonFiniteSampleCount
+                + (monitorLimiter?.NonFiniteSampleCount ?? 0)
+        };
+        diagnostics = pipeline.Diagnostics;
+    }
+
     private void ClearPlaybackDiagnostics()
     {
         if (resources is null)
@@ -1413,6 +1541,7 @@ public sealed class AudioMixEngine : IDisposable
             VolumeSampleProvider microphoneVolume,
             MeteringSampleProvider microphoneMeter,
             MixingSampleProvider mixer,
+            SamplePeakLimiter virtualLimiter,
             MeteringSampleProvider outputMeter,
             WaveFormat targetFormat,
             AudioMixEngineDiagnostics diagnostics)
@@ -1425,6 +1554,7 @@ public sealed class AudioMixEngine : IDisposable
             MicrophoneVolume = microphoneVolume;
             MicrophoneMeter = microphoneMeter;
             Mixer = mixer;
+            VirtualLimiter = virtualLimiter;
             OutputMeter = outputMeter;
             TargetFormat = targetFormat;
             Diagnostics = diagnostics;
@@ -1445,6 +1575,8 @@ public sealed class AudioMixEngine : IDisposable
         public MeteringSampleProvider MicrophoneMeter { get; }
 
         public MixingSampleProvider Mixer { get; }
+
+        public SamplePeakLimiter VirtualLimiter { get; }
 
         public MeteringSampleProvider OutputMeter { get; }
 
@@ -1500,6 +1632,7 @@ public sealed class AudioMixEngine : IDisposable
             MMDevice device,
             WasapiOut output,
             MixingSampleProvider mixer,
+            SamplePeakLimiter limiter,
             MeteringSampleProvider outputMeter,
             WaveFormat mixFormat,
             WaveFormat targetFormat)
@@ -1507,6 +1640,7 @@ public sealed class AudioMixEngine : IDisposable
             Device = device;
             Output = output;
             Mixer = mixer;
+            Limiter = limiter;
             OutputMeter = outputMeter;
             MixFormat = mixFormat;
             TargetFormat = targetFormat;
@@ -1517,6 +1651,8 @@ public sealed class AudioMixEngine : IDisposable
         public WasapiOut Output { get; }
 
         public MixingSampleProvider Mixer { get; }
+
+        public SamplePeakLimiter Limiter { get; }
 
         public MeteringSampleProvider OutputMeter { get; }
 

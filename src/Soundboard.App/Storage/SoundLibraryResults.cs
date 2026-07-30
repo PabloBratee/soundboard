@@ -15,7 +15,8 @@ public sealed record SoundClipMetadataUpdate(
     int TrimStartMilliseconds,
     int? TrimEndMilliseconds,
     int FadeInMilliseconds,
-    int FadeOutMilliseconds);
+    int FadeOutMilliseconds,
+    bool NormalizeLoudness = false);
 
 public sealed record CategoryDeleteResult(
     IReadOnlyList<SoundLibraryEntry> Sounds,

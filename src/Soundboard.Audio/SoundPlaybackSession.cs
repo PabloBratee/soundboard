@@ -24,7 +24,8 @@ internal sealed class SoundPlaybackSession : IDisposable
         AudioClipSettings clipSettings,
         IAudioFileDecoderFactory decoderFactory,
         WaveFormat virtualTargetFormat,
-        float virtualVolume)
+        float virtualVolume,
+        float normalizationGain)
     {
         SoundId = soundId;
         SessionId = sessionId;
@@ -34,7 +35,8 @@ internal sealed class SoundPlaybackSession : IDisposable
             clipSettings,
             decoderFactory,
             virtualTargetFormat,
-            virtualVolume);
+            virtualVolume,
+            normalizationGain);
     }
 
     public Guid SoundId { get; }
@@ -145,7 +147,8 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         AudioClipSettings clipSettings,
         IAudioFileDecoderFactory decoderFactory,
         WaveFormat targetFormat,
-        float volume)
+        float volume,
+        float normalizationGain)
     {
         ArgumentNullException.ThrowIfNull(clipSettings);
         Role = role;
@@ -160,11 +163,27 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
                     + "library clip metadata.");
             }
 
-            var clipped = new AudioClipSampleProvider(
+            ISampleProvider processed = new AudioClipSampleProvider(
                 decodedSource.SampleProvider,
                 clipSettings);
+            if (!float.IsFinite(normalizationGain)
+                || normalizationGain <= 0f)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(normalizationGain),
+                    "Normalization gain must be finite and positive.");
+            }
+
+            if (Math.Abs(normalizationGain - 1f) > 0.000001f)
+            {
+                processed = new VolumeSampleProvider(processed)
+                {
+                    Volume = normalizationGain
+                };
+            }
+
             var normalized = AudioFormatNormalizer.Normalize(
-                clipped,
+                processed,
                 targetFormat,
                 out var resamplingActive,
                 out var channelConversionActive);

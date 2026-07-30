@@ -21,6 +21,10 @@ audio endpoint for Discord or a game.
   accents, editing, search, and persistent manual ordering;
 - supports non-destructive trim-start, trim-end, fade-in, and fade-out playback
   settings with a decoded waveform editor;
+- supports optional per-sound loudness normalization toward a configurable
+  global target, disabled by default;
+- applies configurable bounded-lookahead sample-peak safety limiting to the
+  final virtual mix, sound-only monitor, and local preview;
 - provides local-only edited-clip preview through a safe physical monitor
   endpoint;
 - supports drag-and-drop import, handle-based tile reordering, keyboard
@@ -87,6 +91,8 @@ Runtime data is stored under the current user's local application-data folder:
 ├── settings.json
 ├── Waveforms\
 │   └── <content-hash>-v<data-version>-b<bin-count>.json
+├── Analysis\
+│   └── <analysis-key>.json
 └── Sounds\
     ├── <generated-id>.wav
     ├── <generated-id>.mp3
@@ -94,7 +100,7 @@ Runtime data is stored under the current user's local application-data folder:
     └── <generated-id>.opus
 ```
 
-`library.json` uses schema version 5. It stores user categories with a stable
+`library.json` uses schema version 6. It stores user categories with a stable
 GUID, display name, normalized sort order, and UTC creation date. Sound records
 contain a stable GUID, display name, managed filename, original filename,
 detected container and codec, original extension, duration, UTC import date,
@@ -102,15 +108,19 @@ normalized manual sort order, SHA-256 content hash, optional hotkey, optional
 category GUID, favorite state, and a controlled tile-accent preset. Each sound
 also stores integer-millisecond trim start, optional trim end, fade-in
 duration, and fade-out duration. A null trim end unambiguously means the full
-original decoded duration.
+original decoded duration. Each sound also stores whether loudness
+normalization is enabled; cached measured loudness is derived data and is not
+stored in the library document.
 `settings.json` stores the global-hotkey enabled state and optional Stop Sound
-hotkey alongside the existing audio and window settings. JSON saves use a
+hotkey alongside the existing audio and window settings. It also stores the
+global normalization target, safety-limiter enabled state, and limiter
+ceiling. Defaults are `-16 LUFS`, enabled, and `-1.0 dBFS`. JSON saves use a
 temporary file and atomic replacement. A malformed library file is preserved
 as `library.malformed-<timestamp>.json` before Soundboard creates an empty
 library.
 
-Version 1, version 2, version 3, and version 4 libraries migrate to schema
-version 5 during startup.
+Version 1 through version 5 libraries migrate to schema version 6 during
+startup.
 Their existing sound sequence, stable IDs, names, managed filenames, original
 filenames, original detected durations, content hashes, and hotkeys are
 retained. Existing sounds default to full-duration playback with no fades. New
@@ -124,7 +134,8 @@ touching its audio. Sound and category sort orders are normalized to unique
 consecutive values while preserving the established sequence. The migrated
 document is then saved with the same atomic replacement used by normal library
 mutations. A future schema version is loaded conservatively and is never
-silently rewritten as version 5.
+silently rewritten as version 6. Existing and newly imported sounds default to
+loudness normalization disabled.
 
 Importing copies audio into `Sounds` with a generated filename. Soundboard
 never modifies or deletes the original source file. Removing a tile deletes
@@ -139,6 +150,15 @@ is opened. Cache writes are atomic, waveform generation does not rewrite
 `library.json`, and startup maintenance removes orphaned cache entries where
 possible. A cache failure is shown as a retryable warning while normal
 playback remains available.
+
+`Analysis` contains only versioned loudness measurements and their trim/fade
+cache keys. It never contains decoded audio. The key includes the source
+content hash, trim start/end, fade-in/out, and analysis algorithm version, so
+editing a clip selects a different result automatically. Writes are atomic,
+simultaneous identical requests are deduplicated, corrupt entries are ignored
+and regenerated, and orphaned entries are removed where practical. Analysis
+cache activity never rewrites `library.json` and is never needed when
+normalization is disabled.
 
 ### Backup and complete removal
 
@@ -351,6 +371,68 @@ selected. Tiles show effective duration and a textual **Trimmed** indicator
 whenever trim or fade edits are active. The editor continues to show the
 original duration.
 
+### Loudness normalization and safety limiting
+
+**Normalize loudness** is optional for each sound and is disabled by default.
+The clip editor can analyze the proposed unsaved trim and fade values, shows
+the measured integrated loudness and maximum decoded sample peak, and previews
+the proposed normalization locally. Analysis uses a managed-code
+BS.1770-style gated integrated loudness calculation with K-weighting,
+approximately 400 ms blocks with 75% overlap, an absolute gate near
+`-70 LUFS`, and a relative gate near `-10 LU`. This wording does not claim
+formal EBU certification.
+
+The global target defaults to `-16 LUFS` and can be set from `-24 LUFS` to
+`-10 LUFS`. Requested gain is:
+
+```text
+target LUFS - measured integrated LUFS
+```
+
+Applied gain is limited to a maximum `+12 dB` boost and `-24 dB` attenuation.
+The editor shows both values and warns when the clamp prevents reaching the
+target. Silence, clips shorter than the useful 400 ms window, invalid samples,
+missing files, decoder failures, and unsupported channel counts remain
+non-normalizable. Saving with normalization enabled requires a valid analysis
+whose key exactly matches the proposed trim and fades. Changing an edit marks
+the displayed result stale; choose **Reanalyze** before saving. **Reset**
+changes only trim and fades and does not silently toggle normalization.
+
+Tile clicks and global hotkeys share the same trigger path. If a normalized
+sound has no matching cached result, Soundboard analyzes it asynchronously and
+starts it only if that trigger is still the newest accepted request. A newer
+sound selection supersedes the older pending trigger. Analysis failure leaves
+the microphone engine running and does not silently play the sound
+unnormalized. Tiles show **Normalized** only for a valid matching result and
+**Normalization needs analysis** otherwise.
+
+The sound path order is:
+
+```text
+Decode → trim/fades → optional normalization gain
+→ existing sound volume → mix → final safety limiter → meter → output
+```
+
+Normalization is applied identically before the virtual and monitor branches'
+output conversion and affects sound audio only. Microphone audio is never
+normalized. The final virtual limiter follows the microphone-plus-sound mixer;
+the monitor and preview use separate limiter instances after their sound-only
+paths. Microphone audio remains excluded from both local paths.
+
+The safety processor is a bounded-lookahead **sample-peak limiter**, not a
+true-peak limiter. It defaults to a `-1.0 dBFS` ceiling, uses exactly `5 ms`
+of lookahead and an approximately `100 ms` exponential release, and therefore
+adds exactly `5 ms` of processing latency while enabled. Its allowed ceiling
+range is `-6.0 dBFS` to `-0.1 dBFS`. Disabling it bypasses gain limiting; it
+does not open another output or decoder. Diagnostics show current and maximum
+gain reduction for virtual and monitor output, preview gain reduction where
+available, and rejected non-finite sample counts.
+
+All normalization and limiting are performed during playback. Soundboard
+never rewrites or re-encodes the managed or original audio, never creates a
+normalized copy, never changes the content hash or duplicate detection, and
+never changes Windows or Discord audio settings.
+
 Search is a case-insensitive substring match against display name, original
 filename, and category name. The selected library view is applied first,
 search second, and persistent manual order last. The interface displays the
@@ -400,13 +482,15 @@ the mixer input, disposes all decoder, packet-reader, and file resources, and
 clears playback only when the completed session is still current. A stale
 callback from a stopped or replaced session cannot alter a newer session.
 Virtual output and optional monitoring open independent decoded sources within
-one logical session and apply the same immutable clip settings. Trimming and
-fades occur before per-output resampling/channel conversion and final volume,
-so microphone audio is unaffected. Monitoring does not open a second decoder
-when it is disabled. The virtual branch remains the authoritative completion
-owner, now at the edited trim end. Opus pre-skip and final granule trimming are
-applied, and neither Opus nor Vorbis pads end-of-stream with indefinite
-silence.
+one logical session and apply the same immutable clip and normalization
+settings. Trimming, fades, and optional normalization occur before per-output
+resampling/channel conversion and final volume, so microphone audio is
+unaffected. The virtual final limiter processes the complete microphone-plus-
+sound mix; the monitor limiter sees sound only. Monitoring does not open a
+second decoder when it is disabled. The virtual branch remains the
+authoritative completion owner at the edited trim end. Opus pre-skip and final
+granule trimming are applied, and neither Opus nor Vorbis pads end-of-stream
+with indefinite silence.
 
 ## Global soundboard hotkeys
 
@@ -534,9 +618,11 @@ service the selected endpoints reliably at that time.
 - category-targeted file drop is not implemented;
 - no hotkey profiles, per-game profiles, multiple trim regions, silence
   detection, automatic trimming, destructive editing, edited-file export, or
-  normalization;
+  destructive normalization;
 - waveform preview does not currently draw a live playback cursor;
-- no gate, compression, limiter, or other audio processing;
+- sample-peak limiting only; no oversampled true-peak limiting, compressor,
+  multiband dynamics, gate, equalizer, automatic microphone gain, noise
+  reduction, pitch shifting, or time stretching;
 - no microphone or system-audio monitoring through physical headphones;
 - no system-audio capture or Discord-output capture;
 - no Discord API integration or automatic Discord configuration;
