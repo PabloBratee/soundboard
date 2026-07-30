@@ -12,6 +12,12 @@ public static class AudioFileInspector
         {
             using var source = AudioFileDecoderFactory.Default.Open(filePath);
             ValidateDuration(source.Duration);
+            if (source.Duration < AudioClipSettings.MinimumPlayableDuration)
+            {
+                throw new InvalidDataException(
+                    "The audio file is shorter than the 100-millisecond "
+                    + "minimum playable clip duration.");
+            }
 
             var validationBuffer = new float[
                 Math.Max(source.ChannelCount, Math.Min(

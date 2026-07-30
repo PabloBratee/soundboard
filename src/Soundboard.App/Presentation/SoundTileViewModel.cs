@@ -36,9 +36,11 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
 
     public string OriginalFileName => sound.OriginalFileName;
 
-    public string DurationText => sound.Duration.TotalHours >= 1
-        ? sound.Duration.ToString(@"h\:mm\:ss")
-        : sound.Duration.ToString(@"m\:ss");
+    public string DurationText => FormatDuration(sound.EffectiveDuration);
+
+    public string EditedStateText => sound.HasClipEdits ? "Trimmed" : string.Empty;
+
+    public bool HasClipEdits => sound.HasClipEdits;
 
     public string FormatLabel => sound.FormatLabel;
 
@@ -188,6 +190,9 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
 
         OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(OriginalFileName));
+        OnPropertyChanged(nameof(DurationText));
+        OnPropertyChanged(nameof(EditedStateText));
+        OnPropertyChanged(nameof(HasClipEdits));
         OnPropertyChanged(nameof(FormatLabel));
         OnPropertyChanged(nameof(Sound));
         OnPropertyChanged(nameof(CategoryName));
@@ -239,5 +244,12 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         PropertyChanged?.Invoke(
             this,
             new PropertyChangedEventArgs(propertyName));
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        return duration.TotalHours >= 1
+            ? duration.ToString(@"h\:mm\:ss")
+            : duration.ToString(@"m\:ss\.fff");
     }
 }

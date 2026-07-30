@@ -561,8 +561,8 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Border x:Name="TileBorder"
-                                                    Width="246"
-                                                    MinHeight="254"
+                                                    Width="286"
+                                                    MinHeight="278"
                                                     Margin="7"
                                                     Padding="10"
                                                     AllowDrop="True"
@@ -647,6 +647,11 @@
                                                                        Text="{Binding DurationText}"
                                                                        TextAlignment="Left" />
                                                             <TextBlock Margin="0,3,0,0"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="#7A3E00"
+                                                                       Text="{Binding EditedStateText}"
+                                                                       TextAlignment="Left" />
+                                                            <TextBlock Margin="0,3,0,0"
                                                                        Foreground="#596574"
                                                                        Text="{Binding FormatLabel}"
                                                                        TextAlignment="Left" />
@@ -673,9 +678,8 @@
                                                     </Button>
                                                     <Separator Grid.Row="2"
                                                                Margin="0,6" />
-                                                    <StackPanel Grid.Row="3"
-                                                                HorizontalAlignment="Right"
-                                                                Orientation="Horizontal">
+                                                    <WrapPanel Grid.Row="3"
+                                                               HorizontalAlignment="Right">
                                                         <Button Padding="7,4"
                                                                 Click="AssignTileHotkeyButton_Click"
                                                                 Content="Hotkey"
@@ -687,13 +691,19 @@
                                                                 Content="Edit"
                                                                 Tag="{Binding}"
                                                                 AutomationProperties.Name="Edit sound metadata" />
+                                                        <Button Padding="7,4"
+                                                                Margin="6,0,0,0"
+                                                                Click="EditClipTileButton_Click"
+                                                                Content="Edit clip"
+                                                                Tag="{Binding}"
+                                                                AutomationProperties.Name="Edit sound clip" />
                                                         <Button Margin="6,0,0,0"
                                                                 Padding="7,4"
                                                                 Click="RemoveTileButton_Click"
                                                                 Content="Remove"
                                                                 Tag="{Binding}"
                                                                 AutomationProperties.Name="Remove sound" />
-                                                    </StackPanel>
+                                                    </WrapPanel>
                                                 </Grid>
                                             </Border>
                                             <DataTemplate.Triggers>

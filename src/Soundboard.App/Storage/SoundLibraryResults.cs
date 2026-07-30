@@ -11,6 +11,12 @@ public sealed record SoundMetadataUpdate(
     bool IsFavorite,
     SoundTileAccent TileAccent);
 
+public sealed record SoundClipMetadataUpdate(
+    int TrimStartMilliseconds,
+    int? TrimEndMilliseconds,
+    int FadeInMilliseconds,
+    int FadeOutMilliseconds);
+
 public sealed record CategoryDeleteResult(
     IReadOnlyList<SoundLibraryEntry> Sounds,
     IReadOnlyList<SoundCategory> Categories,

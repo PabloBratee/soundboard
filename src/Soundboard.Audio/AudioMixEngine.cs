@@ -247,7 +247,10 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
-    public void PlaySound(Guid soundId, string filePath)
+    public void PlaySound(
+        Guid soundId,
+        string filePath,
+        AudioClipSettings clipSettings)
     {
         if (soundId == Guid.Empty)
         {
@@ -257,6 +260,7 @@ public sealed class AudioMixEngine : IDisposable
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentNullException.ThrowIfNull(clipSettings);
 
         lock (lifecycleLock)
         {
@@ -280,6 +284,7 @@ public sealed class AudioMixEngine : IDisposable
                     soundId,
                     sessionId,
                     filePath,
+                    clipSettings,
                     decoderFactory,
                     resources.TargetFormat,
                     soundVolume);
@@ -294,6 +299,7 @@ public sealed class AudioMixEngine : IDisposable
                         var monitorBranch = new SoundPlaybackBranch(
                             SoundPlaybackBranchRole.MonitorOutput,
                             filePath,
+                            clipSettings,
                             decoderFactory,
                             resources.Monitor.TargetFormat,
                             monitorVolume);

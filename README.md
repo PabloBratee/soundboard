@@ -19,6 +19,10 @@ audio endpoint for Discord or a game.
 - imports multiple audio files into a persistent local library;
 - supports built-in library views, user categories, favorites, preset tile
   accents, editing, search, and persistent manual ordering;
+- supports non-destructive trim-start, trim-end, fade-in, and fade-out playback
+  settings with a decoded waveform editor;
+- provides local-only edited-clip preview through a safe physical monitor
+  endpoint;
 - supports drag-and-drop import, handle-based tile reordering, keyboard
   reordering, tile playback, and remove;
 - supports one optional persistent Windows global hotkey per sound plus an
@@ -81,6 +85,8 @@ Runtime data is stored under the current user's local application-data folder:
 %LOCALAPPDATA%\Soundboard\
 ├── library.json
 ├── settings.json
+├── Waveforms\
+│   └── <content-hash>-v<data-version>-b<bin-count>.json
 └── Sounds\
     ├── <generated-id>.wav
     ├── <generated-id>.mp3
@@ -88,35 +94,51 @@ Runtime data is stored under the current user's local application-data folder:
     └── <generated-id>.opus
 ```
 
-`library.json` uses schema version 4. It stores user categories with a stable
+`library.json` uses schema version 5. It stores user categories with a stable
 GUID, display name, normalized sort order, and UTC creation date. Sound records
 contain a stable GUID, display name, managed filename, original filename,
 detected container and codec, original extension, duration, UTC import date,
 normalized manual sort order, SHA-256 content hash, optional hotkey, optional
-category GUID, favorite state, and a controlled tile-accent preset.
+category GUID, favorite state, and a controlled tile-accent preset. Each sound
+also stores integer-millisecond trim start, optional trim end, fade-in
+duration, and fade-out duration. A null trim end unambiguously means the full
+original decoded duration.
 `settings.json` stores the global-hotkey enabled state and optional Stop Sound
 hotkey alongside the existing audio and window settings. JSON saves use a
 temporary file and atomic replacement. A malformed library file is preserved
 as `library.malformed-<timestamp>.json` before Soundboard creates an empty
 library.
 
-Version 1, version 2, and version 3 libraries migrate to schema version 4
-during startup.
+Version 1, version 2, version 3, and version 4 libraries migrate to schema
+version 5 during startup.
 Their existing sound sequence, stable IDs, names, managed filenames, original
-filenames, durations, content hashes, and hotkeys are retained. New
+filenames, original detected durations, content hashes, and hotkeys are
+retained. Existing sounds default to full-duration playback with no fades. New
 organization metadata defaults to Uncategorized, not favorite, and the
 Default tile accent. Existing WAV and MP3 entries receive inferred container,
 codec, and original-extension values. Invalid detected-format metadata falls
 back safely with a concise startup warning instead of dropping an otherwise
-valid sound. Sound and category sort orders are normalized to unique
+valid sound. Invalid clip metadata is reset to full-duration playback with no
+fades, and a concise startup warning is shown without dropping the sound or
+touching its audio. Sound and category sort orders are normalized to unique
 consecutive values while preserving the established sequence. The migrated
 document is then saved with the same atomic replacement used by normal library
 mutations. A future schema version is loaded conservatively and is never
-silently rewritten as version 4.
+silently rewritten as version 5.
 
 Importing copies audio into `Sounds` with a generated filename. Soundboard
 never modifies or deletes the original source file. Removing a tile deletes
-only its managed copy.
+only its managed copy. Clip editing never modifies or re-encodes either file,
+never creates an edited audio copy, and never changes the content hash used
+for duplicate detection.
+
+`Waveforms` contains only bounded peak-amplitude data derived from decoded PCM,
+not decoded audio. The cache is rebuildable and is never required for
+playback. A missing or corrupt cache entry is regenerated when the clip editor
+is opened. Cache writes are atomic, waveform generation does not rewrite
+`library.json`, and startup maintenance removes orphaned cache entries where
+possible. A cache failure is shown as a retryable warning while normal
+playback remains available.
 
 ### Backup and complete removal
 
@@ -291,6 +313,44 @@ dialog. Editing does not rename the managed audio file and does not stop a
 playing sound; its stable sound ID and visible Playing state remain attached
 to the same tile.
 
+### Edit a clip non-destructively
+
+Use **Edit clip** on a sound tile to view the entire original decoded
+waveform, original filename, detected format, original duration, proposed trim
+start and end, effective playable duration, and fade-in and fade-out lengths.
+The blue waveform always represents the complete original source. Excluded
+audio is dimmed, orange regions show fades, and the two vertical handles select
+the playable region.
+
+Drag either handle, or use the accessible adjustment buttons. In the waveform,
+press **S** or **E** to select the start or end handle, then use **Left** or
+**Right**. The normal increment is 100 ms; hold **Shift** for 10 ms or
+**Ctrl** for one second. Separate keyboard-focusable buttons move both trim
+handles and increase or decrease both fades. A playable clip is always at
+least 100 ms. Fades cannot be negative, extend beyond the trimmed clip, or
+overlap each other.
+
+**Play Preview** uses the proposed unsaved values and plays once through the
+currently selected physical monitor endpoint in Windows shared mode. Preview
+has its own decoder and output session. It never enters the main virtual
+mixer, never uses `CABLE Input`, never includes microphone, Discord, game, or
+system audio, and does not change the active sound tile. Therefore preview is
+never transmitted to Discord. When the main engine is running, preview uses
+only the already selected safe physical endpoint and never stops or switches
+the engine. When the engine is stopped and that selection is unavailable, it
+may use the current default active non-virtual render endpoint. If no safe
+physical endpoint exists, preview reports an error.
+
+**Save** validates and atomically persists the proposed values while preserving
+the stable sound ID, managed filename, source duration, content hash, hotkey,
+category, favorite state, accent, and sort order. If that sound is playing,
+Save stops it first and does not restart it. **Cancel** stops preview and
+changes no metadata or main playback. **Reset** proposes full
+original-duration playback with zero fades; it remains unsaved until Save is
+selected. Tiles show effective duration and a textual **Trimmed** indicator
+whenever trim or fade edits are active. The editor continues to show the
+original duration.
+
 Search is a case-insensitive substring match against display name, original
 filename, and category name. The selected library view is applied first,
 search second, and persistent manual order last. The interface displays the
@@ -320,12 +380,13 @@ closed.
 
 ## One-shot playback
 
-Each explicit tile selection starts that sound from the beginning. The sound
-plays once, stops at its natural end, and never loops or automatically
-restarts.
+Each explicit tile selection starts that sound from its configured trim start.
+The sound plays once, stops at its configured trim end, and never loops or
+automatically restarts. With default clip settings, this is the full original
+decoded duration.
 
 - Selecting the playing tile explicitly stops its current session and starts a
-  new session from the beginning.
+  new session from the configured trim start.
 - Selecting another tile stops the current sound and starts the selected sound.
 - Only one sound effect is active at a time.
 - **Stop sound** stops the effect without stopping the microphone engine.
@@ -339,9 +400,13 @@ the mixer input, disposes all decoder, packet-reader, and file resources, and
 clears playback only when the completed session is still current. A stale
 callback from a stopped or replaced session cannot alter a newer session.
 Virtual output and optional monitoring open independent decoded sources within
-one logical session; monitoring does not open a second decoder when it is
-disabled. Opus pre-skip and final granule trimming are applied, and neither
-Opus nor Vorbis pads end-of-stream with indefinite silence.
+one logical session and apply the same immutable clip settings. Trimming and
+fades occur before per-output resampling/channel conversion and final volume,
+so microphone audio is unaffected. Monitoring does not open a second decoder
+when it is disabled. The virtual branch remains the authoritative completion
+owner, now at the edited trim end. Opus pre-skip and final granule trimming are
+applied, and neither Opus nor Vorbis pads end-of-stream with indefinite
+silence.
 
 ## Global soundboard hotkeys
 
@@ -467,8 +532,10 @@ service the selected endpoints reliably at that time.
 - one optional flat category per sound; no nested folders or tags;
 - preset tile accents only; no arbitrary color picker or custom tile images;
 - category-targeted file drop is not implemented;
-- no hotkey profiles, per-game profiles, trimming, waveform editor, fades, or
+- no hotkey profiles, per-game profiles, multiple trim regions, silence
+  detection, automatic trimming, destructive editing, edited-file export, or
   normalization;
+- waveform preview does not currently draw a live playback cursor;
 - no gate, compression, limiter, or other audio processing;
 - no microphone or system-audio monitoring through physical headphones;
 - no system-audio capture or Discord-output capture;
@@ -480,4 +547,7 @@ Soundboard does not enable “Listen to this device,” request administrator
 rights, install or modify drivers, change Windows defaults, or change Discord
 settings automatically. Sound-only monitoring has not been claimed as audibly
 verified by automated build validation; perform the manual headset and Discord
-checks on the target computer before relying on it.
+checks on the target computer before relying on it. The same applies to audible
+trim/fade quality and preview routing: automated tests verify provider
+boundaries and reject virtual preview endpoints, but do not substitute for a
+headset-and-Discord check on the target machine.

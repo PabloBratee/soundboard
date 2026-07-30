@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private readonly AudioDeviceService audioDeviceService = new();
     private readonly AudioMixEngine audioEngine = new();
     private readonly SoundLibraryStore soundLibraryStore = new();
+    private readonly WaveformCacheService waveformCacheService = new();
+    private readonly AudioPreviewService previewService = new();
     private readonly ApplicationSettingsStore settingsStore = new();
     private readonly ObservableCollection<SoundTileViewModel> soundTiles = [];
     private readonly ObservableCollection<SoundCategory> soundCategories = [];
@@ -815,12 +817,15 @@ public partial class MainWindow : Window
 
                 ErrorTextBlock.Text = string.Empty;
                 await Task.Run(
-                    () => audioEngine.PlaySound(tile.Id, managedPath));
+                    () => audioEngine.PlaySound(
+                        tile.Id,
+                        managedPath,
+                        tile.Sound.ClipSettings));
 
                 if (audioEngine.CurrentSoundId == tile.Id)
                 {
                     StatusTextBlock.Text =
-                        $"Playing {tile.DisplayName} once from the beginning "
+                        $"Playing {tile.DisplayName} once from its edited start "
                         + $"({source.ToString().ToLowerInvariant()}).";
                 }
             }
@@ -1369,6 +1374,72 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void EditClipTileButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if ((sender as FrameworkElement)?.Tag
+            is not SoundTileViewModel tile)
+        {
+            return;
+        }
+
+        var previewEndpoint = GetSafePreviewEndpoint(
+            out var previewAvailabilityMessage);
+        var dialog = new EditClipDialog(
+            tile.Sound,
+            soundLibraryStore.GetManagedFilePath(tile.Sound),
+            waveformCacheService,
+            previewService,
+            previewEndpoint,
+            previewAvailabilityMessage)
+        {
+            Owner = this
+        };
+        if (dialog.ShowDialog() != true
+            || dialog.ProposedUpdate is not { } proposedUpdate)
+        {
+            return;
+        }
+
+        if (!await libraryActionGate.WaitAsync(0))
+        {
+            ShowUiError(
+                "Another library operation is already in progress.");
+            return;
+        }
+
+        try
+        {
+            if (audioEngine.CurrentSoundId == tile.Id)
+            {
+                await Task.Run(audioEngine.StopSound);
+            }
+
+            var updated = await soundLibraryStore.UpdateClipSettingsAsync(
+                tile.Id,
+                proposedUpdate);
+            tile.ReplaceSound(
+                updated,
+                GetCategoryName(updated.CategoryId));
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text =
+                $"Saved non-destructive clip settings for "
+                + $"\"{updated.DisplayName}\". Playback was not restarted.";
+            RefreshDiagnosticStatus();
+            FocusAfterLibraryMutation(tile.Id);
+        }
+        catch (Exception exception)
+        {
+            ShowUiError(
+                $"Clip settings could not be saved: {exception.Message}");
+        }
+        finally
+        {
+            libraryActionGate.Release();
+        }
+    }
+
     private async void RemoveTileButton_Click(
         object sender,
         RoutedEventArgs eventArgs)
@@ -1402,6 +1473,7 @@ public partial class MainWindow : Window
 
         try
         {
+            previewService.Stop();
             var visibleTiles = soundTilesView
                 .Cast<SoundTileViewModel>()
                 .ToList();
@@ -1426,7 +1498,11 @@ public partial class MainWindow : Window
             hotkeyService?.RemoveBinding(target);
             try
             {
-                await soundLibraryStore.RemoveAsync(tile.Id);
+                var waveformWarnings =
+                    await soundLibraryStore.RemoveAsync(tile.Id);
+                ErrorTextBlock.Text = string.Join(
+                    Environment.NewLine,
+                    waveformWarnings);
             }
             catch
             {
@@ -1443,7 +1519,6 @@ public partial class MainWindow : Window
             soundTiles.Remove(tile);
             soundTilesView.Refresh();
             UpdateLibraryPresentation();
-            ErrorTextBlock.Text = string.Empty;
             StatusTextBlock.Text =
                 $"Removed \"{tile.DisplayName}\" and its managed copy.";
             lastHotkeyAction =
@@ -2966,12 +3041,23 @@ public partial class MainWindow : Window
 
         try
         {
+            previewService.Dispose();
+        }
+        catch (Exception exception)
+        {
+            shutdownErrors.Add(
+                "Preview audio could not be released cleanly: "
+                + exception.Message);
+        }
+
+        try
+        {
             await Task.Run(audioEngine.Dispose);
         }
         catch (Exception exception)
         {
             shutdownErrors.Add(
-                "Audio devices could not be released cleanly: "
+                "Main audio devices could not be released cleanly: "
                 + exception.Message);
         }
 
@@ -3012,6 +3098,54 @@ public partial class MainWindow : Window
                     endpoint.DeviceId,
                     deviceId,
                     StringComparison.Ordinal));
+    }
+
+    private AudioEndpoint? GetSafePreviewEndpoint(
+        out string availabilityMessage)
+    {
+        var selected =
+            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
+        if (selected is
+            {
+                IsLikelyVbCable: false,
+                Direction: AudioDeviceDirection.Render
+            }
+            && selected.State.HasFlag(AudioEndpointState.Active))
+        {
+            availabilityMessage =
+                $"Preview will use the selected physical monitor endpoint: "
+                + $"{selected.FriendlyName}.";
+            return selected;
+        }
+
+        if (audioEngine.State == AudioEngineState.Stopped)
+        {
+            var fallback = currentSnapshot?.RenderEndpoints
+                .FirstOrDefault(
+                    endpoint =>
+                        !endpoint.IsLikelyVbCable
+                        && endpoint.Direction
+                            == AudioDeviceDirection.Render
+                        && endpoint.State.HasFlag(
+                            AudioEndpointState.Active)
+                        && endpoint.IsDefault);
+            if (fallback is not null)
+            {
+                availabilityMessage =
+                    $"The selected monitor endpoint is unavailable. Preview "
+                    + $"will use the current default safe physical endpoint "
+                    + $"{fallback.FriendlyName} while the engine is stopped.";
+                return fallback;
+            }
+        }
+
+        availabilityMessage = audioEngine.State == AudioEngineState.Running
+            ? "Preview is unavailable while the engine is running because "
+                + "the already selected physical monitor endpoint is invalid "
+                + "or unavailable. The engine will not be stopped or switched."
+            : "No active non-virtual physical render endpoint is available "
+                + "for local preview.";
+        return null;
     }
 
     private static bool IsVisibleWindowPosition(

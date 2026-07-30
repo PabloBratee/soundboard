@@ -21,6 +21,7 @@ internal sealed class SoundPlaybackSession : IDisposable
         Guid soundId,
         long sessionId,
         string filePath,
+        AudioClipSettings clipSettings,
         IAudioFileDecoderFactory decoderFactory,
         WaveFormat virtualTargetFormat,
         float virtualVolume)
@@ -30,6 +31,7 @@ internal sealed class SoundPlaybackSession : IDisposable
         VirtualBranch = new SoundPlaybackBranch(
             SoundPlaybackBranchRole.VirtualOutput,
             filePath,
+            clipSettings,
             decoderFactory,
             virtualTargetFormat,
             virtualVolume);
@@ -140,17 +142,29 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
     public SoundPlaybackBranch(
         SoundPlaybackBranchRole role,
         string filePath,
+        AudioClipSettings clipSettings,
         IAudioFileDecoderFactory decoderFactory,
         WaveFormat targetFormat,
         float volume)
     {
+        ArgumentNullException.ThrowIfNull(clipSettings);
         Role = role;
         decodedSource = decoderFactory.Open(filePath);
 
         try
         {
-            var normalized = AudioFormatNormalizer.Normalize(
+            if (decodedSource.Duration != clipSettings.SourceDuration)
+            {
+                throw new InvalidDataException(
+                    "The decoded source duration no longer matches the "
+                    + "library clip metadata.");
+            }
+
+            var clipped = new AudioClipSampleProvider(
                 decodedSource.SampleProvider,
+                clipSettings);
+            var normalized = AudioFormatNormalizer.Normalize(
+                clipped,
                 targetFormat,
                 out var resamplingActive,
                 out var channelConversionActive);

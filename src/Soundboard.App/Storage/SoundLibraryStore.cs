@@ -10,7 +10,7 @@ namespace Soundboard.App.Storage;
 
 public sealed class SoundLibraryStore : IAsyncDisposable
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
     public const int MaximumCategoryNameLength = 60;
     public const int MaximumSoundNameLength = 120;
     public const long MaximumImportFileBytes = 1024L * 1024 * 1024;
@@ -21,7 +21,9 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     private readonly List<SoundLibraryEntry> entries = [];
     private readonly List<SoundCategory> categories = [];
     private readonly Func<CancellationToken, Task>? beforeSaveAsync;
+    private readonly WaveformCacheService waveformCacheService;
     private bool loaded;
+    private bool futureSchemaLoaded;
     private bool disposed;
 
     public SoundLibraryStore(
@@ -35,6 +37,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 "Soundboard");
         SoundsPath = Path.Combine(RootPath, "Sounds");
         LibraryFilePath = Path.Combine(RootPath, "library.json");
+        waveformCacheService = new WaveformCacheService(RootPath);
         this.beforeSaveAsync = beforeSaveAsync;
     }
 
@@ -68,6 +71,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             entries.AddRange(readResult.Sounds);
             categories.Clear();
             categories.AddRange(readResult.Categories);
+            futureSchemaLoaded = readResult.FutureSchemaLoaded;
             loaded = true;
 
             if (readResult.NeedsSave)
@@ -117,6 +121,10 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                         + $"record in {LibraryFilePath}.");
                 }
             }
+
+            warnings.AddRange(
+                waveformCacheService.CleanupOrphans(
+                    entries.Select(entry => entry.ContentHash)));
 
             return new SoundLibraryLoadResult(
                 availableEntries,
@@ -275,6 +283,48 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 cancellationToken);
             entries[index] = renamed;
             return renamed;
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    public async Task<SoundLibraryEntry> UpdateClipSettingsAsync(
+        Guid soundId,
+        SoundClipMetadataUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            EnsureLoaded();
+            var index = FindSoundIndex(soundId);
+            var current = entries[index];
+            _ = AudioClipSettings.Create(
+                current.Duration,
+                update.TrimStartMilliseconds,
+                update.TrimEndMilliseconds,
+                update.FadeInMilliseconds,
+                update.FadeOutMilliseconds);
+            var updated = current with
+            {
+                TrimStartMilliseconds = update.TrimStartMilliseconds,
+                TrimEndMilliseconds = update.TrimEndMilliseconds,
+                FadeInMilliseconds = update.FadeInMilliseconds,
+                FadeOutMilliseconds = update.FadeOutMilliseconds
+            };
+            var updatedEntries = entries.ToList();
+            updatedEntries[index] = updated;
+            await SaveDocumentCoreAsync(
+                updatedEntries,
+                categories,
+                cancellationToken);
+            entries[index] = updated;
+            return updated;
         }
         finally
         {
@@ -565,7 +615,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
     }
 
-    public async Task RemoveAsync(
+    public async Task<IReadOnlyList<string>> RemoveAsync(
         Guid soundId,
         CancellationToken cancellationToken = default)
     {
@@ -663,6 +713,9 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     + "sound was restored to the library.",
                     deleteException);
             }
+
+            return waveformCacheService.DeleteForContentHash(
+                sound.ContentHash);
         }
         finally
         {
@@ -687,7 +740,11 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     {
         if (!File.Exists(LibraryFilePath))
         {
-            return new LibraryReadResult([], [], false);
+            return new LibraryReadResult(
+                [],
+                [],
+                NeedsSave: false,
+                FutureSchemaLoaded: false);
         }
 
         try
@@ -765,7 +822,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             return new LibraryReadResult(
                 loadedEntries,
                 loadedCategories,
-                needsSave);
+                needsSave,
+                schemaVersion > CurrentSchemaVersion);
         }
         catch (JsonException exception)
         {
@@ -794,7 +852,11 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             }
 
             warnings.Add($"Malformed library details: {exception.Message}");
-            return new LibraryReadResult([], [], false);
+            return new LibraryReadResult(
+                [],
+                [],
+                NeedsSave: false,
+                FutureSchemaLoaded: false);
         }
     }
 
@@ -931,6 +993,10 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     serialized.OriginalExtension,
                     warnings,
                     ref needsSave);
+                var clipSettings = ReadClipSettings(
+                    serialized,
+                    warnings,
+                    ref needsSave);
 
                 var entry = new SoundLibraryEntry(
                     serialized.Id,
@@ -948,7 +1014,11 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     tileAccent,
                     detectedFormat.Container,
                     detectedFormat.Codec,
-                    detectedFormat.OriginalExtension);
+                    detectedFormat.OriginalExtension,
+                    clipSettings.TrimStartMilliseconds,
+                    clipSettings.TrimEndMilliseconds,
+                    clipSettings.FadeInMilliseconds,
+                    clipSettings.FadeOutMilliseconds);
                 ValidateEntry(entry, ids);
                 result.Add(entry);
                 if (hotkey is not null)
@@ -1020,6 +1090,98 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             needsSave = true;
             return null;
         }
+    }
+
+    private static SoundClipMetadataUpdate ReadClipSettings(
+        SoundLibraryEntryDocument serialized,
+        ICollection<string> warnings,
+        ref bool needsSave)
+    {
+        try
+        {
+            var trimStart = ReadOptionalNonNegativeInt32(
+                serialized.TrimStartMilliseconds,
+                defaultValue: 0,
+                "trim start");
+            var trimEnd = ReadOptionalNullableNonNegativeInt32(
+                serialized.TrimEndMilliseconds,
+                "trim end");
+            var fadeIn = ReadOptionalNonNegativeInt32(
+                serialized.FadeInMilliseconds,
+                defaultValue: 0,
+                "fade in");
+            var fadeOut = ReadOptionalNonNegativeInt32(
+                serialized.FadeOutMilliseconds,
+                defaultValue: 0,
+                "fade out");
+
+            _ = trimStart == 0
+                && trimEnd is null
+                && fadeIn == 0
+                && fadeOut == 0
+                    ? AudioClipSettings.FullDuration(serialized.Duration)
+                    : AudioClipSettings.Create(
+                        serialized.Duration,
+                        trimStart,
+                        trimEnd,
+                        fadeIn,
+                        fadeOut);
+            return new SoundClipMetadataUpdate(
+                trimStart,
+                trimEnd,
+                fadeIn,
+                fadeOut);
+        }
+        catch (Exception exception)
+            when (exception is ArgumentException
+                or InvalidOperationException
+                or OverflowException)
+        {
+            warnings.Add(
+                $"Sound {serialized.Id} had invalid clip edit metadata and "
+                + "was reset to its full original duration with no fades: "
+                + exception.Message);
+            needsSave = true;
+            return new SoundClipMetadataUpdate(0, null, 0, 0);
+        }
+    }
+
+    private static int ReadOptionalNonNegativeInt32(
+        JsonElement? element,
+        int defaultValue,
+        string fieldName)
+    {
+        if (element is not { } value
+            || value.ValueKind is JsonValueKind.Null
+                or JsonValueKind.Undefined)
+        {
+            return defaultValue;
+        }
+
+        if (value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var parsed)
+            || parsed < 0)
+        {
+            throw new ArgumentException(
+                $"The persisted {fieldName} value is not a safe "
+                + "non-negative integer.");
+        }
+
+        return parsed;
+    }
+
+    private static int? ReadOptionalNullableNonNegativeInt32(
+        JsonElement? element,
+        string fieldName)
+    {
+        if (element is not { } value
+            || value.ValueKind is JsonValueKind.Null
+                or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
+        return ReadOptionalNonNegativeInt32(value, 0, fieldName);
     }
 
     private static Guid? ReadCategoryId(
@@ -1751,6 +1913,14 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             throw new InvalidOperationException(
                 "Load the sound library before modifying it.");
         }
+
+        if (futureSchemaLoaded)
+        {
+            throw new InvalidOperationException(
+                "This library was written by a newer Soundboard schema. "
+                + "It is available read-only so unknown metadata is not "
+                + "silently downgraded.");
+        }
     }
 
     private void ThrowIfDisposed()
@@ -1772,7 +1942,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     private sealed record LibraryReadResult(
         List<SoundLibraryEntry> Sounds,
         List<SoundCategory> Categories,
-        bool NeedsSave);
+        bool NeedsSave,
+        bool FutureSchemaLoaded);
 
     private sealed record SoundLibraryDocument(
         int SchemaVersion,
@@ -1795,5 +1966,9 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         JsonElement? TileAccent,
         JsonElement? Container,
         JsonElement? Codec,
-        JsonElement? OriginalExtension);
+        JsonElement? OriginalExtension,
+        JsonElement? TrimStartMilliseconds,
+        JsonElement? TrimEndMilliseconds,
+        JsonElement? FadeInMilliseconds,
+        JsonElement? FadeOutMilliseconds);
 }

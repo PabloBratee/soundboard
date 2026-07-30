@@ -1,0 +1,218 @@
+<Window x:Class="Soundboard.App.EditClipDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Soundboard.App"
+        Title="Edit clip"
+        Width="850"
+        Height="790"
+        MinWidth="720"
+        MinHeight="680"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock FontSize="20"
+                       FontWeight="SemiBold"
+                       Text="Edit clip" />
+            <TextBlock x:Name="SoundNameTextBlock"
+                       Margin="0,5,0,0"
+                       FontSize="16"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Grid Grid.Row="1"
+              Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="125" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="125" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock FontWeight="SemiBold"
+                       Text="Original filename" />
+            <TextBlock x:Name="OriginalFileNameTextBlock"
+                       Grid.Column="1"
+                       TextWrapping="Wrap" />
+            <TextBlock Grid.Column="2"
+                       FontWeight="SemiBold"
+                       Text="Detected format" />
+            <TextBlock x:Name="FormatTextBlock"
+                       Grid.Column="3" />
+            <TextBlock Grid.Row="1"
+                       Margin="0,6,0,0"
+                       FontWeight="SemiBold"
+                       Text="Original duration" />
+            <TextBlock x:Name="OriginalDurationTextBlock"
+                       Grid.Row="1"
+                       Grid.Column="1"
+                       Margin="0,6,0,0" />
+            <TextBlock Grid.Row="1"
+                       Grid.Column="2"
+                       Margin="0,6,0,0"
+                       FontWeight="SemiBold"
+                       Text="Effective duration" />
+            <TextBlock x:Name="EffectiveDurationTextBlock"
+                       Grid.Row="1"
+                       Grid.Column="3"
+                       Margin="0,6,0,0" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="2"
+                      Margin="0,16,0,0"
+                      VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock FontWeight="SemiBold"
+                           Text="Entire original waveform" />
+                <local:WaveformEditorControl x:Name="WaveformEditor"
+                                             Height="220"
+                                             Margin="0,8,0,0"
+                                             AutomationProperties.HelpText="S selects the start handle, E selects the end handle. Left and Right move the selected handle by 100 milliseconds; Shift uses 10 milliseconds and Control uses one second."
+                                             AutomationProperties.Name="Waveform trim editor" />
+                <TextBlock x:Name="WaveformStatusTextBlock"
+                           Margin="0,7,0,0"
+                           Foreground="#596574"
+                           Text="Loading decoded waveform…"
+                           TextWrapping="Wrap" />
+
+                <Grid Margin="0,15,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock FontWeight="SemiBold"
+                                   Text="Trim start" />
+                        <TextBlock x:Name="TrimStartTextBlock"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock FontWeight="SemiBold"
+                                   Text="Trim end" />
+                        <TextBlock x:Name="TrimEndTextBlock"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock FontWeight="SemiBold"
+                                   Text="Fade in" />
+                        <TextBlock x:Name="FadeInTextBlock"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="3">
+                        <TextBlock FontWeight="SemiBold"
+                                   Text="Fade out" />
+                        <TextBlock x:Name="FadeOutTextBlock"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                </Grid>
+
+                <UniformGrid Margin="0,14,0,0"
+                             Columns="4">
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="TrimStartEarlierButton_Click"
+                            Content="Start earlier"
+                            AutomationProperties.Name="Move trim start earlier" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="TrimStartLaterButton_Click"
+                            Content="Start later"
+                            AutomationProperties.Name="Move trim start later" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="TrimEndEarlierButton_Click"
+                            Content="End earlier"
+                            AutomationProperties.Name="Move trim end earlier" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="TrimEndLaterButton_Click"
+                            Content="End later"
+                            AutomationProperties.Name="Move trim end later" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="FadeInDecreaseButton_Click"
+                            Content="Fade in −"
+                            AutomationProperties.Name="Decrease fade in" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="FadeInIncreaseButton_Click"
+                            Content="Fade in +"
+                            AutomationProperties.Name="Increase fade in" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="FadeOutDecreaseButton_Click"
+                            Content="Fade out −"
+                            AutomationProperties.Name="Decrease fade out" />
+                    <Button Margin="2"
+                            Padding="5"
+                            Click="FadeOutIncreaseButton_Click"
+                            Content="Fade out +"
+                            AutomationProperties.Name="Increase fade out" />
+                </UniformGrid>
+                <TextBlock Margin="0,7,0,0"
+                           Foreground="#596574"
+                           Text="Adjustment buttons use 100 ms. Hold Shift for 10 ms or Ctrl for 1 second. In the waveform, press S or E to select a handle, then use Left or Right with the same modifiers."
+                           TextWrapping="Wrap" />
+
+                <StackPanel Margin="0,16,0,0"
+                            Orientation="Horizontal">
+                    <Button MinWidth="110"
+                            Padding="9,5"
+                            Click="PlayPreviewButton_Click"
+                            Content="Play Preview" />
+                    <Button Margin="8,0,0,0"
+                            MinWidth="110"
+                            Padding="9,5"
+                            Click="StopPreviewButton_Click"
+                            Content="Stop Preview" />
+                    <Button Margin="8,0,0,0"
+                            MinWidth="90"
+                            Padding="9,5"
+                            Click="ResetButton_Click"
+                            Content="Reset"
+                            AutomationProperties.Name="Reset clip edits" />
+                </StackPanel>
+                <TextBlock x:Name="PreviewStatusTextBlock"
+                           Margin="0,8,0,0"
+                           Foreground="#596574"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <TextBlock Grid.Row="3"
+                   Margin="0,14,0,0"
+                   Foreground="#596574"
+                   Text="Edits affect playback only. The source and managed audio stay byte-for-byte unchanged, and preview is routed only to the selected physical monitor endpoint."
+                   TextWrapping="Wrap" />
+
+        <StackPanel Grid.Row="4"
+                    Margin="0,18,0,0"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal">
+            <Button MinWidth="88"
+                    Padding="10,5"
+                    IsCancel="True"
+                    Click="CancelButton_Click"
+                    Content="Cancel" />
+            <Button Margin="9,0,0,0"
+                    MinWidth="88"
+                    Padding="10,5"
+                    IsDefault="True"
+                    Click="SaveButton_Click"
+                    Content="Save" />
+        </StackPanel>
+    </Grid>
+</Window>

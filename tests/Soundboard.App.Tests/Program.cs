@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Concentus.Enums;
 using Concentus.Oggfile;
 using Concentus.Structs;
+using NAudio.Wave;
 using Soundboard.App.Hotkeys;
 using Soundboard.App.Presentation;
 using Soundboard.App.Storage;
@@ -22,7 +24,7 @@ internal static class Program
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
-            $"Soundboard-Milestone7-Tests-{Guid.NewGuid():N}");
+            $"Soundboard-Milestone8-Tests-{Guid.NewGuid():N}");
 
         try
         {
@@ -39,9 +41,16 @@ internal static class Program
                 Path.Combine(testRoot, "version-one"));
             await RunAudioCompatibilityTestsAsync(
                 Path.Combine(testRoot, "audio-formats"));
+            await RunClipMetadataTestsAsync(
+                Path.Combine(testRoot, "clip-metadata"));
+            await RunClipProviderTestsAsync(
+                Path.Combine(testRoot, "clip-providers"));
+            await RunWaveformTestsAsync(
+                Path.Combine(testRoot, "waveforms"));
+            RunPreviewSafetyTests();
             await RunOptionalLocalFormatTestsAsync(
                 Path.Combine(testRoot, "local-formats"));
-            Console.WriteLine("All Milestone 7 tests passed.");
+            Console.WriteLine("All Milestone 8 tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -137,11 +146,11 @@ internal static class Program
                    await File.ReadAllTextAsync(store.LibraryFilePath)))
         {
             AssertEqual(
-                4,
+                5,
                 migratedJson.RootElement
                     .GetProperty("schemaVersion")
                     .GetInt32(),
-                "schema persisted as v4");
+                "schema persisted as v5");
         }
 
         var categoryOne = await store.CreateCategoryAsync("  Effects  ");
@@ -351,7 +360,11 @@ internal static class Program
         AssertTrue(
             sound.CategoryId is null
             && !sound.IsFavorite
-            && sound.TileAccent == SoundTileAccent.Default,
+            && sound.TileAccent == SoundTileAccent.Default
+            && sound.TrimStartMilliseconds == 0
+            && sound.TrimEndMilliseconds is null
+            && sound.FadeInMilliseconds == 0
+            && sound.FadeOutMilliseconds == 0,
             "new import defaults");
         AssertEqual(0, sound.SortOrder, "new import appended");
 
@@ -673,7 +686,7 @@ internal static class Program
         Console.WriteLine(
             "PASS Ogg Opus, Ogg Vorbis, .opus, mono/stereo, one-shot EOS, "
             + "invalid/corrupt/multichannel rejection, duplicate detection, "
-            + "schema v4 format persistence, and personalization");
+            + "schema v5 format persistence, and personalization");
     }
 
     private static async Task RunOptionalLocalFormatTestsAsync(string root)
@@ -730,6 +743,485 @@ internal static class Program
         }
     }
 
+    private static async Task RunClipMetadataTestsAsync(string root)
+    {
+        var soundsPath = Path.Combine(root, "Sounds");
+        Directory.CreateDirectory(soundsPath);
+        var soundId = Guid.NewGuid();
+        var categoryId = Guid.NewGuid();
+        var managedFileName = $"{soundId:N}.wav";
+        var managedPath = Path.Combine(soundsPath, managedFileName);
+        WriteEditingWave(managedPath, channels: 1);
+        var hash = await GetFileHashAsync(managedPath);
+        var importedAt = DateTimeOffset.UtcNow;
+        var hotkey = new HotkeyGesture(
+            0x48,
+            HotkeyModifiers.Control,
+            "Ctrl + H");
+        await WriteJsonAsync(
+            Path.Combine(root, "library.json"),
+            new
+            {
+                SchemaVersion = 4,
+                Categories = new[]
+                {
+                    new
+                    {
+                        Id = categoryId,
+                        DisplayName = "Clips",
+                        SortOrder = 0,
+                        CreatedAtUtc = importedAt
+                    }
+                },
+                Sounds = new[]
+                {
+                    new
+                    {
+                        Id = soundId,
+                        DisplayName = "Metadata clip",
+                        ManagedFileName = managedFileName,
+                        OriginalFileName = "source.wav",
+                        FileType = "WAV",
+                        Duration = TimeSpan.FromSeconds(1),
+                        ImportedAtUtc = importedAt,
+                        SortOrder = 0,
+                        ContentHash = hash,
+                        Hotkey = hotkey,
+                        CategoryId = categoryId,
+                        IsFavorite = true,
+                        TileAccent = SoundTileAccent.Teal,
+                        Container = AudioContainerType.Wav,
+                        Codec = AudioCodecType.Pcm,
+                        OriginalExtension = ".wav"
+                    }
+                }
+            });
+
+        await using (var store = new SoundLibraryStore(root))
+        {
+            var loaded = await store.LoadAsync();
+            var migrated = loaded.Sounds.Single();
+            AssertTrue(
+                loaded.Warnings.Any(
+                    warning => warning.Contains(
+                        "schema version 4",
+                        StringComparison.OrdinalIgnoreCase)),
+                "v4 to v5 migration warning");
+            AssertEqual(soundId, migrated.Id, "stable ID migrated");
+            AssertEqual(hash, migrated.ContentHash, "content hash migrated");
+            AssertEqual(hotkey, migrated.Hotkey, "hotkey migrated");
+            AssertEqual(categoryId, migrated.CategoryId, "category migrated");
+            AssertTrue(migrated.IsFavorite, "favorite migrated");
+            AssertEqual(
+                SoundTileAccent.Teal,
+                migrated.TileAccent,
+                "accent migrated");
+            AssertEqual(0, migrated.TrimStartMilliseconds, "default trim start");
+            AssertEqual(null, migrated.TrimEndMilliseconds, "default trim end");
+            AssertEqual(
+                TimeSpan.FromSeconds(1),
+                migrated.EffectiveDuration,
+                "default clip covers source");
+            var libraryBeforeWaveform = await File.ReadAllTextAsync(
+                store.LibraryFilePath);
+            _ = await new WaveformCacheService(root)
+                .GetOrCreateAsync(managedPath, hash, 200);
+            AssertEqual(
+                libraryBeforeWaveform,
+                await File.ReadAllTextAsync(store.LibraryFilePath),
+                "waveform generation does not rewrite library JSON");
+
+            var edited = await store.UpdateClipSettingsAsync(
+                soundId,
+                new SoundClipMetadataUpdate(100, 900, 100, 150));
+            AssertEqual(soundId, edited.Id, "edit preserves stable ID");
+            AssertEqual(hash, edited.ContentHash, "edit preserves content hash");
+            AssertEqual(hotkey, edited.Hotkey, "edit preserves hotkey");
+            AssertEqual(categoryId, edited.CategoryId, "edit preserves category");
+            AssertTrue(edited.IsFavorite, "edit preserves favorite");
+            AssertEqual(
+                SoundTileAccent.Teal,
+                edited.TileAccent,
+                "edit preserves accent");
+            AssertEqual(
+                hash,
+                await GetFileHashAsync(managedPath),
+                "clip edit preserves managed-file bytes");
+            AssertEqual(
+                TimeSpan.FromMilliseconds(800),
+                edited.EffectiveDuration,
+                "effective duration persisted");
+        }
+
+        using (var persisted = JsonDocument.Parse(
+                   await File.ReadAllTextAsync(
+                       Path.Combine(root, "library.json"))))
+        {
+            AssertEqual(
+                5,
+                persisted.RootElement.GetProperty("schemaVersion").GetInt32(),
+                "v4 migrated to schema v5");
+        }
+
+        await using (var reloadedStore = new SoundLibraryStore(root))
+        {
+            var reloaded = (await reloadedStore.LoadAsync()).Sounds.Single();
+            AssertEqual(100, reloaded.TrimStartMilliseconds, "trim start reload");
+            AssertEqual(900, reloaded.TrimEndMilliseconds, "trim end reload");
+            AssertEqual(100, reloaded.FadeInMilliseconds, "fade in reload");
+            AssertEqual(150, reloaded.FadeOutMilliseconds, "fade out reload");
+            var cachePath = new WaveformCacheService(root)
+                .GetCacheFilePath(hash, 200);
+            AssertTrue(File.Exists(cachePath), "waveform cache exists before remove");
+            var removeWarnings = await reloadedStore.RemoveAsync(soundId);
+            AssertEqual(0, removeWarnings.Count, "waveform removal warnings");
+            AssertTrue(!File.Exists(managedPath), "managed copy removed");
+            AssertTrue(!File.Exists(cachePath), "waveform cache removed");
+        }
+
+        var invalidRoot = Path.Combine(root, "invalid");
+        var invalidSounds = Path.Combine(invalidRoot, "Sounds");
+        Directory.CreateDirectory(invalidSounds);
+        var invalidId = Guid.NewGuid();
+        var invalidManaged = $"{invalidId:N}.wav";
+        WriteEditingWave(
+            Path.Combine(invalidSounds, invalidManaged),
+            channels: 1);
+        await WriteJsonAsync(
+            Path.Combine(invalidRoot, "library.json"),
+            new
+            {
+                SchemaVersion = 5,
+                Categories = Array.Empty<object>(),
+                Sounds = new[]
+                {
+                    new
+                    {
+                        Id = invalidId,
+                        DisplayName = "Invalid clip",
+                        ManagedFileName = invalidManaged,
+                        OriginalFileName = "invalid.wav",
+                        FileType = "WAV",
+                        Duration = TimeSpan.FromSeconds(1),
+                        ImportedAtUtc = importedAt,
+                        SortOrder = 0,
+                        ContentHash = new string('A', 64),
+                        Container = AudioContainerType.Wav,
+                        Codec = AudioCodecType.Pcm,
+                        OriginalExtension = ".wav",
+                        TrimStartMilliseconds = -5,
+                        TrimEndMilliseconds = 50,
+                        FadeInMilliseconds = int.MaxValue,
+                        FadeOutMilliseconds = -1
+                    }
+                }
+            });
+        await using (var invalidStore = new SoundLibraryStore(invalidRoot))
+        {
+            var loaded = await invalidStore.LoadAsync();
+            var preserved = loaded.Sounds.Single();
+            AssertEqual(invalidId, preserved.Id, "invalid clip sound preserved");
+            AssertEqual(0, preserved.TrimStartMilliseconds, "invalid trim reset");
+            AssertEqual(null, preserved.TrimEndMilliseconds, "invalid end reset");
+            AssertEqual(0, preserved.FadeInMilliseconds, "invalid fade in reset");
+            AssertEqual(0, preserved.FadeOutMilliseconds, "invalid fade out reset");
+            AssertTrue(
+                loaded.Warnings.Any(
+                    warning => warning.Contains(
+                        "invalid clip edit metadata",
+                        StringComparison.OrdinalIgnoreCase)),
+                "invalid clip warning surfaced");
+        }
+
+        Console.WriteLine(
+            "PASS schema v4-to-v5 migration, clip defaults, invalid metadata "
+            + "fallback, persistence, and identity/personalization preservation");
+    }
+
+    private static Task RunClipProviderTestsAsync(string root)
+    {
+        Directory.CreateDirectory(root);
+        const int sampleRate = 1000;
+        var mono = new TestSampleProvider(
+            Enumerable.Repeat(1f, sampleRate).ToArray(),
+            sampleRate,
+            channels: 1);
+        var settings = AudioClipSettings.Create(
+            TimeSpan.FromSeconds(1),
+            200,
+            800,
+            100,
+            100);
+        var clipped = new AudioClipSampleProvider(mono, settings);
+        var samples = ReadAllSamples(clipped);
+        AssertEqual(600, samples.Length, "mono trimmed sample count");
+        AssertTrue(Math.Abs(samples[0]) < 0.001f, "fade in starts near silence");
+        AssertTrue(samples[99] > 0.99f, "fade in reaches full scale");
+        AssertTrue(samples[500] > 0.99f, "fade out begins at full scale");
+        AssertTrue(Math.Abs(samples[^1]) < 0.001f, "fade out ends at silence");
+        AssertEqual(
+            0,
+            clipped.Read(new float[32], 0, 32),
+            "trimmed provider remains at EOS");
+
+        var stereoSource = new TestSampleProvider(
+            Enumerable.Repeat(0.5f, sampleRate * 2).ToArray(),
+            sampleRate,
+            channels: 2);
+        var stereoClip = new AudioClipSampleProvider(
+            stereoSource,
+            settings);
+        var stereoSamples = ReadAllSamples(stereoClip);
+        AssertEqual(1200, stereoSamples.Length, "stereo trimmed sample count");
+        AssertTrue(
+            Math.Abs(stereoSamples[0] - stereoSamples[1]) < 0.0001f,
+            "stereo channels share fade gain");
+
+        var zeroFadeSource = new TestSampleProvider(
+            Enumerable.Repeat(0.25f, sampleRate).ToArray(),
+            sampleRate,
+            channels: 1);
+        var zeroFadeClip = new AudioClipSampleProvider(
+            zeroFadeSource,
+            AudioClipSettings.Create(
+                TimeSpan.FromSeconds(1),
+                100,
+                900,
+                0,
+                0));
+        AssertTrue(
+            ReadAllSamples(zeroFadeClip).All(
+                sample => Math.Abs(sample - 0.25f) < 0.0001f),
+            "zero fades preserve samples");
+
+        AssertThrows<ArgumentException>(
+            () => AudioClipSettings.Create(
+                TimeSpan.FromSeconds(1),
+                0,
+                99,
+                0,
+                0),
+            "minimum 100 ms duration");
+        AssertThrows<ArgumentException>(
+            () => AudioClipSettings.Create(
+                TimeSpan.FromSeconds(1),
+                0,
+                500,
+                300,
+                201),
+            "fade sum validation");
+        AssertThrows<OverflowException>(
+            () => AudioSamplePosition.TimeToFramePosition(
+                TimeSpan.MaxValue,
+                int.MaxValue),
+            "sample position overflow is checked");
+
+        Console.WriteLine(
+            "PASS sample-accurate trim boundaries, deterministic EOS, mono/"
+            + "stereo fades, zero fades, minimum duration, fade sum, and "
+            + "checked sample arithmetic");
+        return Task.CompletedTask;
+    }
+
+    private static async Task RunWaveformTestsAsync(string root)
+    {
+        var sources = Path.Combine(root, "Sources");
+        var cacheRoot = Path.Combine(root, "Cache");
+        Directory.CreateDirectory(sources);
+        var wav = Path.Combine(sources, "editing.wav");
+        var stereoWav = Path.Combine(sources, "editing-stereo.wav");
+        var mp3 = Path.Combine(sources, "editing.mp3");
+        var opusOgg = Path.Combine(sources, "editing-opus.ogg");
+        var opusExtension = Path.Combine(sources, "editing.opus");
+        var vorbis = Path.Combine(sources, "editing-vorbis.ogg");
+        WriteEditingWave(wav, channels: 1);
+        WriteEditingWave(stereoWav, channels: 2);
+        using (var reader = new WaveFileReader(wav))
+        {
+            MediaFoundationEncoder.EncodeToMp3(reader, mp3, 128000);
+        }
+
+        WriteTestOpus(opusOgg, channels: 1, frameCount: 48000);
+        WriteTestOpus(opusExtension, channels: 2, frameCount: 48000);
+        File.Copy(
+            Path.Combine(
+                AppContext.BaseDirectory,
+                "Fixtures",
+                "tiny-vorbis.ogg"),
+            vorbis);
+
+        var paths = new[]
+        {
+            (wav, "WAV"),
+            (mp3, "MP3"),
+            (opusOgg, "Ogg Opus"),
+            (opusExtension, ".opus"),
+            (vorbis, "Ogg Vorbis"),
+            (stereoWav, "stereo WAV")
+        };
+        var cache = new WaveformCacheService(cacheRoot);
+        foreach (var (path, label) in paths)
+        {
+            AssertDecodedTrim(path, label);
+            var hash = await GetFileHashAsync(path);
+            var waveform = await cache.GetOrCreateAsync(path, hash, 200);
+            AssertEqual(200, waveform.Data.Peaks.Count, $"{label} bins");
+            AssertTrue(
+                waveform.Data.ChannelCount is 1 or 2,
+                $"{label} waveform channel count");
+            AssertTrue(
+                waveform.Data.Peaks.All(
+                    peak => float.IsFinite(peak) && peak >= 0f),
+                $"{label} waveform peaks valid");
+            var roundTrip = await new WaveformCacheService(cacheRoot)
+                .GetOrCreateAsync(path, hash, 200);
+            AssertTrue(roundTrip.LoadedFromCache, $"{label} cache round trip");
+        }
+
+        var wavHash = await GetFileHashAsync(wav);
+        var corruptPath = cache.GetCacheFilePath(wavHash, 300);
+        Directory.CreateDirectory(Path.GetDirectoryName(corruptPath)!);
+        await File.WriteAllTextAsync(corruptPath, "{ corrupt");
+        var regenerated = await new WaveformCacheService(cacheRoot)
+            .GetOrCreateAsync(wav, wavHash, 300);
+        AssertTrue(
+            !regenerated.LoadedFromCache
+            && regenerated.Warning?.Contains(
+                "regenerated",
+                StringComparison.OrdinalIgnoreCase) == true,
+            "corrupt cache regenerated with warning");
+        AssertTrue(
+            WaveformCacheService.BuildCacheFileName(wavHash, 300, 1)
+            != WaveformCacheService.BuildCacheFileName(wavHash, 300, 2),
+            "cache key changes with waveform version");
+
+        var invalid = Path.Combine(sources, "invalid.wav");
+        await File.WriteAllBytesAsync(invalid, "not audio"u8.ToArray());
+        await AssertThrowsAsync<Exception>(
+            () => new WaveformCacheService(
+                    Path.Combine(root, "FailureCache"))
+                .GetOrCreateAsync(invalid, new string('B', 64), 200),
+            "waveform failure surfaced");
+        using var playbackAfterWaveformFailure =
+            AudioFileDecoderFactory.Default.Open(wav);
+        AssertTrue(
+            playbackAfterWaveformFailure.SampleProvider.Read(
+                new float[128],
+                0,
+                128) > 0,
+            "waveform failure does not affect playback");
+
+        using var virtualSource = AudioFileDecoderFactory.Default.Open(wav);
+        using var monitorSource = AudioFileDecoderFactory.Default.Open(wav);
+        var sharedSettings = AudioClipSettings.Create(
+            virtualSource.Duration,
+            100,
+            900,
+            100,
+            100);
+        AssertSequence(
+            ReadAllSamples(
+                new AudioClipSampleProvider(
+                    virtualSource.SampleProvider,
+                    sharedSettings)),
+            ReadAllSamples(
+                new AudioClipSampleProvider(
+                    monitorSource.SampleProvider,
+                    sharedSettings)),
+            "independent virtual and monitor decoders use identical edits");
+
+        Console.WriteLine(
+            "PASS WAV, MP3, Ogg Opus, Ogg Vorbis, .opus, mono/stereo "
+            + "waveforms and trims, cache round-trip/regeneration/versioning, "
+            + "and waveform-failure playback isolation");
+    }
+
+    private static void RunPreviewSafetyTests()
+    {
+        var physical = new AudioEndpoint(
+            "physical",
+            "Headphones",
+            AudioDeviceDirection.Render,
+            AudioEndpointState.Active,
+            IsDefault: true,
+            IsLikelyVbCable: false);
+        AudioPreviewService.ValidatePreviewEndpoint(physical);
+        var cable = new AudioEndpoint(
+            "cable",
+            "CABLE Input (VB-Audio Virtual Cable)",
+            AudioDeviceDirection.Render,
+            AudioEndpointState.Active,
+            IsDefault: false,
+            IsLikelyVbCable: true);
+        AssertThrows<InvalidOperationException>(
+            () => AudioPreviewService.ValidatePreviewEndpoint(cable),
+            "VB-CABLE rejected for preview");
+        var capture = physical with
+        {
+            Direction = AudioDeviceDirection.Capture
+        };
+        AssertThrows<InvalidOperationException>(
+            () => AudioPreviewService.ValidatePreviewEndpoint(capture),
+            "capture endpoint rejected for preview");
+        Console.WriteLine(
+            "PASS preview endpoint safety accepts active physical render and "
+            + "rejects VB-CABLE and capture endpoints");
+    }
+
+    private static void AssertDecodedTrim(string path, string label)
+    {
+        using var decoded = AudioFileDecoderFactory.Default.Open(path);
+        var durationMilliseconds = checked(
+            (int)Math.Floor(decoded.Duration.TotalMilliseconds));
+        AssertTrue(
+            durationMilliseconds >= 100,
+            $"{label} supports minimum clip duration");
+        var start = durationMilliseconds >= 400
+            ? durationMilliseconds / 4
+            : 0;
+        var end = durationMilliseconds >= 400
+            ? durationMilliseconds * 3 / 4
+            : durationMilliseconds;
+        var settings = AudioClipSettings.Create(
+            decoded.Duration,
+            start,
+            end == durationMilliseconds ? null : end,
+            0,
+            0);
+        var provider = new AudioClipSampleProvider(
+            decoded.SampleProvider,
+            settings);
+        var samples = ReadAllSamples(provider);
+        var expectedFrames =
+            AudioSamplePosition.TimeToFramePosition(
+                settings.TrimEnd,
+                decoded.SampleRate)
+            - AudioSamplePosition.TimeToFramePosition(
+                settings.TrimStart,
+                decoded.SampleRate);
+        AssertEqual(
+            checked((int)(expectedFrames * decoded.ChannelCount)),
+            samples.Length,
+            $"{label} trimmed sample count");
+        AssertEqual(
+            0,
+            provider.Read(new float[64], 0, 64),
+            $"{label} trim remains at EOS");
+    }
+
+    private static float[] ReadAllSamples(ISampleProvider provider)
+    {
+        var result = new List<float>();
+        var buffer = new float[4096];
+        int read;
+        while ((read = provider.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            result.AddRange(buffer.AsSpan(0, read).ToArray());
+        }
+
+        return result.ToArray();
+    }
+
     private static void AssertOneShotEndOfStream(
         string path,
         string message)
@@ -764,10 +1256,12 @@ internal static class Program
         return samples;
     }
 
-    private static void WriteTestOpus(string path, int channels)
+    private static void WriteTestOpus(
+        string path,
+        int channels,
+        int frameCount = 4800)
     {
         const int sampleRate = 48000;
-        const int frameCount = 4800;
         var samples = new float[frameCount * channels];
         for (var frame = 0; frame < frameCount; frame++)
         {
@@ -1151,6 +1645,9 @@ internal static class Program
                         "newer",
                         StringComparison.OrdinalIgnoreCase)),
                 "future schema warning");
+            await AssertThrowsAsync<InvalidOperationException>(
+                () => store.RenameAsync(futureId, "Must not save"),
+                "future schema mutations are read-only");
         }
 
         AssertEqual(
@@ -1190,6 +1687,19 @@ internal static class Program
         await JsonSerializer.SerializeAsync(stream, value, JsonOptions);
     }
 
+    private static async Task<string> GetFileHashAsync(string path)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexString(
+            await SHA256.HashDataAsync(stream));
+    }
+
     private static void WriteTestWave(string path)
     {
         const int sampleRate = 8000;
@@ -1217,6 +1727,42 @@ internal static class Program
         for (var index = 0; index < sampleCount; index++)
         {
             writer.Write((short)0);
+        }
+    }
+
+    private static void WriteEditingWave(string path, short channels)
+    {
+        const int sampleRate = 8000;
+        const short bitsPerSample = 16;
+        const int frameCount = sampleRate;
+        var dataLength =
+            frameCount * channels * bitsPerSample / 8;
+
+        using var stream = File.Create(path);
+        using var writer = new BinaryWriter(stream);
+        writer.Write("RIFF"u8.ToArray());
+        writer.Write(36 + dataLength);
+        writer.Write("WAVE"u8.ToArray());
+        writer.Write("fmt "u8.ToArray());
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write(channels);
+        writer.Write(sampleRate);
+        writer.Write(sampleRate * channels * bitsPerSample / 8);
+        writer.Write((short)(channels * bitsPerSample / 8));
+        writer.Write(bitsPerSample);
+        writer.Write("data"u8.ToArray());
+        writer.Write(dataLength);
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            var sample = (short)(
+                short.MaxValue
+                * 0.35
+                * Math.Sin(2 * Math.PI * 440 * frame / sampleRate));
+            for (var channel = 0; channel < channels; channel++)
+            {
+                writer.Write(sample);
+            }
         }
     }
 
@@ -1321,4 +1867,36 @@ internal static class Program
         int SortOrder,
         string ContentHash,
         HotkeyGesture? Hotkey);
+
+    private sealed class TestSampleProvider : ISampleProvider
+    {
+        private readonly float[] samples;
+        private int position;
+
+        public TestSampleProvider(
+            float[] samples,
+            int sampleRate,
+            int channels)
+        {
+            this.samples = samples;
+            WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(
+                sampleRate,
+                channels);
+        }
+
+        public WaveFormat WaveFormat { get; }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            var available = Math.Min(count, samples.Length - position);
+            if (available <= 0)
+            {
+                return 0;
+            }
+
+            Array.Copy(samples, position, buffer, offset, available);
+            position += available;
+            return available;
+        }
+    }
 }
