@@ -21,6 +21,7 @@ internal sealed class SoundPlaybackSession : IDisposable
         Guid soundId,
         long sessionId,
         string filePath,
+        IAudioFileDecoderFactory decoderFactory,
         WaveFormat virtualTargetFormat,
         float virtualVolume)
     {
@@ -29,6 +30,7 @@ internal sealed class SoundPlaybackSession : IDisposable
         VirtualBranch = new SoundPlaybackBranch(
             SoundPlaybackBranchRole.VirtualOutput,
             filePath,
+            decoderFactory,
             virtualTargetFormat,
             virtualVolume);
     }
@@ -130,7 +132,7 @@ internal sealed class SoundPlaybackSession : IDisposable
 internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
 {
     private readonly object syncRoot = new();
-    private readonly AudioFileReader reader;
+    private readonly DecodedAudioSource decodedSource;
     private readonly VolumeSampleProvider volumeProvider;
     private Exception? playbackError;
     private bool disposed;
@@ -138,16 +140,17 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
     public SoundPlaybackBranch(
         SoundPlaybackBranchRole role,
         string filePath,
+        IAudioFileDecoderFactory decoderFactory,
         WaveFormat targetFormat,
         float volume)
     {
         Role = role;
-        reader = new AudioFileReader(filePath);
+        decodedSource = decoderFactory.Open(filePath);
 
         try
         {
             var normalized = AudioFormatNormalizer.Normalize(
-                reader,
+                decodedSource.SampleProvider,
                 targetFormat,
                 out var resamplingActive,
                 out var channelConversionActive);
@@ -161,7 +164,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         }
         catch
         {
-            reader.Dispose();
+            decodedSource.Dispose();
             throw;
         }
     }
@@ -247,7 +250,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
             }
 
             disposed = true;
-            reader.Dispose();
+            decodedSource.Dispose();
         }
     }
 }

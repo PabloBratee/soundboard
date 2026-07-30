@@ -14,6 +14,7 @@ public sealed class AudioMixEngine : IDisposable
     private const int MeterNotificationsPerSecond = 10;
 
     private readonly object lifecycleLock = new();
+    private readonly IAudioFileDecoderFactory decoderFactory;
     private AudioPipelineResources? resources;
     private SoundPlaybackSession? currentSound;
     private AudioMixEngineDiagnostics? diagnostics;
@@ -39,6 +40,13 @@ public sealed class AudioMixEngine : IDisposable
 
     public event EventHandler<SoundPlaybackStateChangedEventArgs>?
         SoundPlaybackStateChanged;
+
+    public AudioMixEngine(
+        IAudioFileDecoderFactory? decoderFactory = null)
+    {
+        this.decoderFactory =
+            decoderFactory ?? AudioFileDecoderFactory.Default;
+    }
 
     public AudioEngineState State =>
         (AudioEngineState)Volatile.Read(ref stateValue);
@@ -250,15 +258,6 @@ public sealed class AudioMixEngine : IDisposable
 
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
-        var extension = Path.GetExtension(filePath);
-
-        if (!extension.Equals(".wav", StringComparison.OrdinalIgnoreCase)
-            && !extension.Equals(".mp3", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new NotSupportedException(
-                "This milestone supports WAV and MP3 sound files only.");
-        }
-
         lock (lifecycleLock)
         {
             ThrowIfDisposed();
@@ -281,6 +280,7 @@ public sealed class AudioMixEngine : IDisposable
                     soundId,
                     sessionId,
                     filePath,
+                    decoderFactory,
                     resources.TargetFormat,
                     soundVolume);
 
@@ -294,6 +294,7 @@ public sealed class AudioMixEngine : IDisposable
                         var monitorBranch = new SoundPlaybackBranch(
                             SoundPlaybackBranchRole.MonitorOutput,
                             filePath,
+                            decoderFactory,
                             resources.Monitor.TargetFormat,
                             monitorVolume);
                         session.AttachMonitorBranch(monitorBranch);

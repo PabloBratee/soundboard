@@ -40,6 +40,8 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         ? sound.Duration.ToString(@"h\:mm\:ss")
         : sound.Duration.ToString(@"m\:ss");
 
+    public string FormatLabel => sound.FormatLabel;
+
     public SoundLibraryEntry Sound => sound;
 
     public string CategoryName => categoryName;
@@ -186,6 +188,7 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
 
         OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(OriginalFileName));
+        OnPropertyChanged(nameof(FormatLabel));
         OnPropertyChanged(nameof(Sound));
         OnPropertyChanged(nameof(CategoryName));
         OnPropertyChanged(nameof(IsFavorite));

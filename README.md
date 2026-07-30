@@ -9,7 +9,8 @@ audio endpoint for Discord or a game.
 - discovers active Windows capture and render endpoints;
 - retains selections by Windows Core Audio endpoint ID;
 - captures the physical microphone through WASAPI shared mode;
-- mixes the live microphone with one WAV or MP3 sound at a time;
+- mixes the live microphone with one WAV, MP3, Ogg Opus, or Ogg Vorbis sound
+  at a time;
 - optionally sends that sound alone to physical headphones or speakers through
   a separate WASAPI shared-mode output;
 - provides microphone volume, mute, peak metering, master sound volume, and a
@@ -36,10 +37,38 @@ These restrictions keep microphone audio away from physical playback devices.
 - C# with nullable reference types and implicit usings
 - .NET 10 WPF targeting `net10.0-windows`
 - x64 Windows
-- NAudio 2.3.0 and Windows Core Audio APIs
+- NAudio 2.3.0, NVorbis 0.10.5, Concentus.Oggfile 1.0.7, and Windows Core
+  Audio APIs
 - SDK-style projects and Git
 
-NAudio is pinned to stable version 2.3.0.
+All decoder packages are pinned to exact stable versions. WAV and MP3 retain
+the existing NAudio path. NVorbis provides managed Ogg Vorbis decoding, and
+Concentus.Oggfile plus its managed Concentus dependency provide Ogg Opus
+decoding. Soundboard does not require FFmpeg, VLC, an external converter, a
+runtime codec download, or network access.
+
+## Supported audio formats
+
+Soundboard accepts:
+
+- `.wav`;
+- `.mp3`;
+- `.ogg` containing Opus audio;
+- `.ogg` containing Vorbis audio; and
+- `.opus` containing Opus audio in an Ogg container.
+
+Ogg is a container, not an audio codec. The `.ogg` extension alone therefore
+does not establish whether a file is playable. Soundboard verifies the Ogg
+page structure and checksums, reads the identification packet, recognizes
+`OpusHead` or the Vorbis identification signature, and routes the stream to
+the matching managed decoder. This supports Discord-downloaded Ogg Opus files
+when they are genuine Ogg containers. A Vorbis stream named `.opus` is also
+reported and decoded as Vorbis based on its content.
+
+An `.ogg` file containing video, multiple logical streams, an unsupported Ogg
+codec, malformed headers, invalid checksums, unsupported multichannel audio,
+or non-Ogg bytes is rejected. Soundboard does not claim support for every file
+with an `.ogg` extension.
 
 ## Local data and privacy
 
@@ -54,30 +83,36 @@ Runtime data is stored under the current user's local application-data folder:
 ├── settings.json
 └── Sounds\
     ├── <generated-id>.wav
-    └── <generated-id>.mp3
+    ├── <generated-id>.mp3
+    ├── <generated-id>.ogg
+    └── <generated-id>.opus
 ```
 
-`library.json` uses schema version 3. It stores user categories with a stable
+`library.json` uses schema version 4. It stores user categories with a stable
 GUID, display name, normalized sort order, and UTC creation date. Sound records
 contain a stable GUID, display name, managed filename, original filename,
-WAV/MP3 type, duration, UTC import date, normalized manual sort order, SHA-256
-content hash, optional hotkey, optional category GUID, favorite state, and a
-controlled tile-accent preset.
+detected container and codec, original extension, duration, UTC import date,
+normalized manual sort order, SHA-256 content hash, optional hotkey, optional
+category GUID, favorite state, and a controlled tile-accent preset.
 `settings.json` stores the global-hotkey enabled state and optional Stop Sound
 hotkey alongside the existing audio and window settings. JSON saves use a
 temporary file and atomic replacement. A malformed library file is preserved
 as `library.malformed-<timestamp>.json` before Soundboard creates an empty
 library.
 
-Version 1 and version 2 libraries migrate to schema version 3 during startup.
+Version 1, version 2, and version 3 libraries migrate to schema version 4
+during startup.
 Their existing sound sequence, stable IDs, names, managed filenames, original
-filenames, durations, content hashes, and hotkeys are retained. New metadata
-defaults to Uncategorized, not favorite, and the Default tile accent. Invalid
-new metadata falls back to those safe defaults with a concise startup warning
-instead of dropping the sound. Sound and category sort orders are normalized
-to unique consecutive values while preserving the established sequence. The
-migrated document is then saved with the same atomic replacement used by
-normal library mutations.
+filenames, durations, content hashes, and hotkeys are retained. New
+organization metadata defaults to Uncategorized, not favorite, and the
+Default tile accent. Existing WAV and MP3 entries receive inferred container,
+codec, and original-extension values. Invalid detected-format metadata falls
+back safely with a concise startup warning instead of dropping an otherwise
+valid sound. Sound and category sort orders are normalized to unique
+consecutive values while preserving the established sequence. The migrated
+document is then saved with the same atomic replacement used by normal library
+mutations. A future schema version is loaded conservatively and is never
+silently rewritten as version 4.
 
 Importing copies audio into `Sounds` with a generated filename. Soundboard
 never modifies or deletes the original source file. Removing a tile deletes
@@ -181,7 +216,7 @@ VB-CABLE capture input. Soundboard never enables Windows **Listen to this
 device**.
 
 The selected virtual and monitor endpoints can have different sample rates and
-channel counts. Each sound gets a separate reader and is normalized
+channel counts. Each sound gets a separate decoded source and is normalized
 independently to a mono or stereo 32-bit floating-point mixer target derived
 from that endpoint's own mix format. A monitor endpoint exposing more than two
 channels is rejected with a clear warning rather than reinterpreted.
@@ -204,18 +239,26 @@ start it again. Soundboard does not silently switch outputs while running.
 
 ## Organize and manage sounds
 
-Use **Import sounds** to select multiple `.wav` and `.mp3` files, or drag files
-onto the soundboard area. Every candidate is opened through the audio-reading
-stack, inspected for duration, hashed, and then copied into the managed
-library. Invalid and unreadable files are skipped without blocking valid
-files. New imports are Uncategorized, not favorite, use the Default tile
-accent, and appear at the end of the global manual order. File drops onto the
-general soundboard area use the same defaults. Category-targeted file drop is
-not currently implemented; assign the category through **Edit** after import.
+Use **Import sounds** to select multiple `.wav`, `.mp3`, `.ogg`, and `.opus`
+files, or drag files onto the soundboard area. The picker and drag-and-drop
+path use the same decoder factory as playback. Every candidate is opened,
+inspected by content, decoded far enough to prove it has readable audio,
+checked for a valid duration, hashed with streaming SHA-256, and copied with
+streaming I/O into the managed library. The original bytes and sensible
+original extension are preserved; files are never converted to WAV or MP3.
+Zero-byte, corrupt, unsupported, unreadable, over-1-GiB, and over-12-hour files
+are skipped without blocking valid files. New imports are Uncategorized, not
+favorite, use the Default tile accent, and appear at the end of the global
+manual order. File drops onto the general soundboard area use the same
+defaults. Category-targeted file drop is not currently implemented; assign
+the category through **Edit** after import.
 
 If the same content is imported again, Soundboard does not create another
 managed copy. The summary identifies the existing sound by display name.
-Duplicate detection is based on file content, not the source path or filename.
+Duplicate detection is based on the exact original source bytes, not the
+source path, filename, extension, or audible similarity. Reimporting the same
+Discord `.ogg` is skipped, while a separately encoded MP3 with similar audio
+is a different file.
 
 The left library panel contains three fixed, non-deletable views:
 
@@ -241,10 +284,12 @@ are running.
 Use **Edit** to change a sound's trimmed display name, category, favorite
 state, and one of the controlled Default, Blue, Purple, Green, Orange, Red,
 Pink, or Teal accent presets in one atomic metadata update. The dialog also
-shows the original filename, duration, and assigned hotkey without editing
-them. Hotkeys remain in the dedicated hotkey dialog. Editing does not rename
-the managed audio file and does not stop a playing sound; its stable sound ID
-and visible Playing state remain attached to the same tile.
+shows the original filename, duration, concise detected format (`WAV`, `MP3`,
+`OGG · Opus`, or `OGG · Vorbis`), and assigned hotkey without editing them.
+Tiles show the same format label. Hotkeys remain in the dedicated hotkey
+dialog. Editing does not rename the managed audio file and does not stop a
+playing sound; its stable sound ID and visible Playing state remain attached
+to the same tile.
 
 Search is a case-insensitive substring match against display name, original
 filename, and category name. The selected library view is applied first,
@@ -290,9 +335,13 @@ restarts.
 
 Each session carries the stable library sound ID and a monotonically increasing
 session ID. Mixer end-of-stream queues completion only once. Completion removes
-the mixer input, disposes the reader/session, and clears playback only when the
-completed session is still current. A stale callback from a stopped or replaced
-session cannot alter a newer session.
+the mixer input, disposes all decoder, packet-reader, and file resources, and
+clears playback only when the completed session is still current. A stale
+callback from a stopped or replaced session cannot alter a newer session.
+Virtual output and optional monitoring open independent decoded sources within
+one logical session; monitoring does not open a second decoder when it is
+disabled. Opus pre-skip and final granule trimming are applied, and neither
+Opus nor Vorbis pads end-of-stream with indefinite silence.
 
 ## Global soundboard hotkeys
 
@@ -391,9 +440,16 @@ there is no override for virtual monitor endpoints.
 
 ### Unsupported format
 
-The library accepts WAV and MP3 sources. The mixer supports mono or stereo
-microphone/file sources and mono or stereo output. A multichannel output is
-rejected rather than silently reinterpreted.
+The library accepts WAV, MP3, Ogg Opus, and Ogg Vorbis sources. Renaming
+non-Ogg data to `.ogg` does not make it valid. If an Ogg file is rejected,
+confirm that it is an audio-only Ogg container with Opus or Vorbis, then
+download or export it again if it is truncated or corrupt. WebM Opus, Ogg
+video, multiple-stream Ogg, and other Ogg codecs are not supported. No
+external converter is bundled.
+
+The mixer supports mono or stereo microphone/file sources and mono or stereo
+output. Multichannel Ogg input and multichannel output are rejected rather
+than silently reinterpreted.
 
 ### Crackling or growing latency
 
@@ -406,7 +462,7 @@ service the selected endpoints reliably at that time.
 
 - one microphone, one VB-CABLE render endpoint, and one optional physical
   sound-only monitor endpoint;
-- one WAV or MP3 sound effect at a time;
+- one WAV, MP3, Ogg Opus, or Ogg Vorbis sound effect at a time;
 - mono/stereo sources and mono/stereo output only;
 - one optional flat category per sound; no nested folders or tags;
 - preset tile accents only; no arbitrary color picker or custom tile images;

@@ -10,9 +10,10 @@ namespace Soundboard.App.Storage;
 
 public sealed class SoundLibraryStore : IAsyncDisposable
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
     public const int MaximumCategoryNameLength = 60;
     public const int MaximumSoundNameLength = 120;
+    public const long MaximumImportFileBytes = 1024L * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -920,13 +921,23 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     serialized.TileAccent,
                     warnings,
                     ref needsSave);
+                var detectedFormat = ReadDetectedFormat(
+                    serialized.Id,
+                    serialized.FileType,
+                    serialized.OriginalFileName,
+                    serialized.ManagedFileName,
+                    serialized.Container,
+                    serialized.Codec,
+                    serialized.OriginalExtension,
+                    warnings,
+                    ref needsSave);
 
                 var entry = new SoundLibraryEntry(
                     serialized.Id,
                     serialized.DisplayName,
                     serialized.ManagedFileName,
                     serialized.OriginalFileName,
-                    serialized.FileType,
+                    detectedFormat.DisplayLabel,
                     serialized.Duration,
                     serialized.ImportedAtUtc,
                     serialized.SortOrder,
@@ -934,7 +945,10 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     hotkey,
                     categoryId,
                     isFavorite,
-                    tileAccent);
+                    tileAccent,
+                    detectedFormat.Container,
+                    detectedFormat.Codec,
+                    detectedFormat.OriginalExtension);
                 ValidateEntry(entry, ids);
                 result.Add(entry);
                 if (hotkey is not null)
@@ -1114,30 +1128,54 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     {
         var sourceFileName = Path.GetFileName(sourcePath);
         var extension = Path.GetExtension(sourcePath).ToLowerInvariant();
-        if (extension is not ".wav" and not ".mp3")
+        if (extension is not (
+            ".wav" or ".mp3" or ".ogg" or ".opus"))
         {
             invalidFiles.Add(
                 new FileImportFailure(
                     sourceFileName,
-                    "Only WAV and MP3 files are supported."));
+                    "Only WAV, MP3, Ogg Opus, and Ogg Vorbis audio files "
+                    + "are supported."));
             return;
         }
 
         AudioFileDetails details;
         try
         {
+            var sourceLength = new FileInfo(sourcePath).Length;
+            if (sourceLength == 0)
+            {
+                throw new InvalidDataException(
+                    "The audio file is empty.");
+            }
+
+            if (sourceLength > MaximumImportFileBytes)
+            {
+                throw new InvalidDataException(
+                    "The audio file exceeds the 1 GiB import limit.");
+            }
+
             details = await Task.Run(
                 () => AudioFileInspector.Inspect(sourcePath),
                 cancellationToken);
         }
         catch (Exception exception)
-            when (exception is IOException
-                or UnauthorizedAccessException
-                or InvalidDataException
+            when (exception is InvalidDataException
                 or NotSupportedException)
         {
             invalidFiles.Add(
                 new FileImportFailure(sourceFileName, exception.Message));
+            return;
+        }
+        catch (Exception exception)
+            when (exception is IOException
+                or UnauthorizedAccessException)
+        {
+            errors.Add(
+                new FileImportFailure(
+                    sourceFileName,
+                    "The file is missing, locked, or unreadable: "
+                    + exception.Message));
             return;
         }
 
@@ -1234,7 +1272,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 importedDisplayName,
                 managedFileName,
                 sourceFileName,
-                extension[1..].ToUpperInvariant(),
+                details.Format.DisplayLabel,
                 details.Duration,
                 DateTimeOffset.UtcNow,
                 entries.Count + imported.Count,
@@ -1242,7 +1280,10 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 Hotkey: null,
                 CategoryId: categoryId,
                 IsFavorite: false,
-                TileAccent: SoundTileAccent.Default));
+                TileAccent: SoundTileAccent.Default,
+                Container: details.Format.Container,
+                Codec: details.Format.Codec,
+                OriginalExtension: details.Format.OriginalExtension));
     }
 
     private async Task SaveDocumentCoreAsync(
@@ -1316,6 +1357,158 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
 
         return Path.Combine(SoundsPath, fileName);
+    }
+
+    private static AudioFileFormat ReadDetectedFormat(
+        Guid soundId,
+        string? legacyFileType,
+        string originalFileName,
+        string managedFileName,
+        JsonElement? containerElement,
+        JsonElement? codecElement,
+        JsonElement? originalExtensionElement,
+        ICollection<string> warnings,
+        ref bool needsSave)
+    {
+        var inferredExtension = Path.GetExtension(originalFileName)
+            .ToLowerInvariant();
+        if (inferredExtension is not (
+            ".wav" or ".mp3" or ".ogg" or ".opus"))
+        {
+            inferredExtension = Path.GetExtension(managedFileName)
+                .ToLowerInvariant();
+        }
+
+        AudioFileFormat inferred;
+        if (legacyFileType?.Contains(
+                "Opus",
+                StringComparison.OrdinalIgnoreCase) == true)
+        {
+            inferred = new AudioFileFormat(
+                AudioContainerType.Ogg,
+                AudioCodecType.Opus,
+                inferredExtension is ".ogg" or ".opus"
+                    ? inferredExtension
+                    : ".ogg");
+        }
+        else if (legacyFileType?.Contains(
+                     "Vorbis",
+                     StringComparison.OrdinalIgnoreCase) == true)
+        {
+            inferred = new AudioFileFormat(
+                AudioContainerType.Ogg,
+                AudioCodecType.Vorbis,
+                inferredExtension is ".ogg" or ".opus"
+                    ? inferredExtension
+                    : ".ogg");
+        }
+        else if (string.Equals(
+                     legacyFileType,
+                     "MP3",
+                     StringComparison.OrdinalIgnoreCase)
+                 || inferredExtension == ".mp3")
+        {
+            inferred = new AudioFileFormat(
+                AudioContainerType.Mp3,
+                AudioCodecType.MpegLayer3,
+                ".mp3");
+        }
+        else
+        {
+            inferred = new AudioFileFormat(
+                AudioContainerType.Wav,
+                AudioCodecType.Pcm,
+                ".wav");
+        }
+
+        if (!TryReadEnum(containerElement, out AudioContainerType container)
+            || !TryReadEnum(codecElement, out AudioCodecType codec)
+            || !TryReadExtension(
+                originalExtensionElement,
+                out var originalExtension)
+            || !IsValidFormatCombination(container, codec)
+            || !IsValidOriginalExtension(container, originalExtension))
+        {
+            if (containerElement is not null
+                || codecElement is not null
+                || originalExtensionElement is not null)
+            {
+                warnings.Add(
+                    $"Sound {soundId} had invalid detected-format metadata "
+                    + $"and was loaded as {inferred.DisplayLabel}.");
+            }
+
+            needsSave = true;
+            return inferred;
+        }
+
+        return new AudioFileFormat(container, codec, originalExtension);
+    }
+
+    private static bool TryReadEnum<TEnum>(
+        JsonElement? element,
+        out TEnum value)
+        where TEnum : struct, Enum
+    {
+        value = default;
+        if (element is not { } enumElement)
+        {
+            return false;
+        }
+
+        if (enumElement.ValueKind == JsonValueKind.String)
+        {
+            return Enum.TryParse(
+                    enumElement.GetString(),
+                    ignoreCase: true,
+                    out value)
+                && Enum.IsDefined(value);
+        }
+
+        if (enumElement.ValueKind == JsonValueKind.Number
+            && enumElement.TryGetInt32(out var numeric))
+        {
+            value = (TEnum)Enum.ToObject(typeof(TEnum), numeric);
+            return Enum.IsDefined(value);
+        }
+
+        return false;
+    }
+
+    private static bool TryReadExtension(
+        JsonElement? element,
+        out string extension)
+    {
+        extension = string.Empty;
+        if (element is not { ValueKind: JsonValueKind.String } value)
+        {
+            return false;
+        }
+
+        extension = value.GetString()?.ToLowerInvariant() ?? string.Empty;
+        return extension is ".wav" or ".mp3" or ".ogg" or ".opus";
+    }
+
+    private static bool IsValidFormatCombination(
+        AudioContainerType container,
+        AudioCodecType codec)
+    {
+        return (container, codec) is
+            (AudioContainerType.Wav, AudioCodecType.Pcm)
+            or (AudioContainerType.Mp3, AudioCodecType.MpegLayer3)
+            or (AudioContainerType.Ogg, AudioCodecType.Opus)
+            or (AudioContainerType.Ogg, AudioCodecType.Vorbis);
+    }
+
+    private static bool IsValidOriginalExtension(
+        AudioContainerType container,
+        string extension)
+    {
+        return (container, extension) is
+            (AudioContainerType.Wav, ".wav")
+            or (AudioContainerType.Mp3, ".mp3")
+            or (AudioContainerType.Ogg, ".ogg")
+            or (AudioContainerType.Ogg, ".opus");
     }
 
     private static bool NormalizeSoundOrder(
@@ -1393,7 +1586,10 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             || Path.GetFileName(entry.ManagedFileName)
                 != entry.ManagedFileName
             || string.IsNullOrWhiteSpace(entry.OriginalFileName)
-            || entry.FileType is not ("WAV" or "MP3")
+            || !IsValidFormatCombination(entry.Container, entry.Codec)
+            || !IsValidOriginalExtension(
+                entry.Container,
+                entry.OriginalExtension)
             || entry.Duration <= TimeSpan.Zero
             || string.IsNullOrWhiteSpace(entry.ContentHash))
         {
@@ -1596,5 +1792,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         JsonElement? Hotkey,
         JsonElement? CategoryId,
         JsonElement? IsFavorite,
-        JsonElement? TileAccent);
+        JsonElement? TileAccent,
+        JsonElement? Container,
+        JsonElement? Codec,
+        JsonElement? OriginalExtension);
 }

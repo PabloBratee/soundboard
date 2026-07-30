@@ -623,9 +623,11 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog
         {
             Title = "Import sounds",
-            Filter = "Supported audio (*.wav;*.mp3)|*.wav;*.mp3"
+            Filter = "Audio files (*.wav;*.mp3;*.ogg;*.opus)"
+                + "|*.wav;*.mp3;*.ogg;*.opus"
                 + "|WAV files (*.wav)|*.wav"
-                + "|MP3 files (*.mp3)|*.mp3",
+                + "|MP3 files (*.mp3)|*.mp3"
+                + "|Ogg audio (*.ogg;*.opus)|*.ogg;*.opus",
             CheckFileExists = true,
             Multiselect = true
         };
@@ -2324,7 +2326,8 @@ public partial class MainWindow : Window
         SelectedViewTextBlock.Text =
             $"View: {selectedView?.DisplayName ?? "All Sounds"}";
         EmptyLibraryTextBlock.Text = soundTiles.Count == 0
-            ? "No sounds yet. Import WAV or MP3 files, or drop them here."
+            ? "No sounds yet. Import WAV, MP3, Ogg Opus, or Ogg Vorbis "
+                + "files, or drop them here."
             : !string.IsNullOrWhiteSpace(SearchTextBox?.Text)
                 ? "No sounds match the current search."
                 : selectedView?.Kind == SoundLibraryViewKind.Favorites
@@ -2765,6 +2768,11 @@ public partial class MainWindow : Window
     private static string BuildImportDetails(SoundImportResult result)
     {
         var details = new List<string>();
+        details.AddRange(
+            result.Imported.Select(
+                sound =>
+                    $"{sound.OriginalFileName}: imported as "
+                    + $"{sound.FormatLabel}."));
         details.AddRange(
             result.Duplicates.Select(
                 duplicate =>

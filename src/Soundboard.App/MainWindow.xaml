@@ -548,7 +548,7 @@
                                            VerticalAlignment="Center"
                                            FontSize="16"
                                            Foreground="#66717E"
-                                           Text="No sounds yet. Import WAV or MP3 files, or drop them here."
+                                           Text="No sounds yet. Import WAV, MP3, Ogg Opus, or Ogg Vorbis files, or drop them here."
                                            TextAlignment="Center"
                                            TextWrapping="Wrap" />
 
@@ -645,6 +645,10 @@
                                                             <TextBlock Margin="0,5,0,0"
                                                                        Foreground="#596574"
                                                                        Text="{Binding DurationText}"
+                                                                       TextAlignment="Left" />
+                                                            <TextBlock Margin="0,3,0,0"
+                                                                       Foreground="#596574"
+                                                                       Text="{Binding FormatLabel}"
                                                                        TextAlignment="Left" />
                                                             <TextBlock Margin="0,4,0,0"
                                                                        Foreground="#596574"

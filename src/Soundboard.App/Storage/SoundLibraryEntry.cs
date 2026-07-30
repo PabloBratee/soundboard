@@ -1,4 +1,5 @@
 using Soundboard.App.Hotkeys;
+using Soundboard.Audio;
 
 namespace Soundboard.App.Storage;
 
@@ -15,4 +16,13 @@ public sealed record SoundLibraryEntry(
     HotkeyGesture? Hotkey = null,
     Guid? CategoryId = null,
     bool IsFavorite = false,
-    SoundTileAccent TileAccent = SoundTileAccent.Default);
+    SoundTileAccent TileAccent = SoundTileAccent.Default,
+    AudioContainerType Container = AudioContainerType.Wav,
+    AudioCodecType Codec = AudioCodecType.Pcm,
+    string OriginalExtension = ".wav")
+{
+    public string FormatLabel => new AudioFileFormat(
+        Container,
+        Codec,
+        OriginalExtension).DisplayLabel;
+}

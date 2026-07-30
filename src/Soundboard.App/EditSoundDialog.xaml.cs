@@ -37,6 +37,7 @@ public partial class EditSoundDialog : Window
         DurationTextBlock.Text = sound.Duration.TotalHours >= 1
             ? sound.Duration.ToString(@"h\:mm\:ss")
             : sound.Duration.ToString(@"m\:ss");
+        FormatTextBlock.Text = sound.FormatLabel;
         HotkeyTextBlock.Text =
             sound.Hotkey?.DisplayText ?? "No hotkey";
 
