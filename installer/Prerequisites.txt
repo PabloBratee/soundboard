@@ -1,0 +1,11 @@
+Soundboard requires Windows x64.
+
+VB-CABLE is required for virtual microphone routing and must be installed
+separately. It is not included in this installer.
+
+For Discord sound effects, noise suppression such as Krisp normally must be
+disabled.
+
+This installer does not download software, install drivers, change Windows
+audio settings, or change Discord settings. Soundboard is self-contained and
+does not require a separate .NET runtime installation.

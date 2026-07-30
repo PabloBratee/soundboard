@@ -6,6 +6,7 @@ using Concentus.Oggfile;
 using Concentus.Structs;
 using NAudio.Wave;
 using Soundboard.App.Hotkeys;
+using Soundboard.App.Lifetime;
 using Soundboard.App.Presentation;
 using Soundboard.App.Storage;
 using Soundboard.Audio;
@@ -29,6 +30,7 @@ internal static class Program
         try
         {
             Directory.CreateDirectory(testRoot);
+            RunSingleInstanceTests();
             await RunMigrationAndOrganizationTestsAsync(
                 Path.Combine(testRoot, "organization"));
             await RunImportAndSearchTestsAsync(
@@ -66,6 +68,34 @@ internal static class Program
         {
             TryDeleteTestDirectory(testRoot);
         }
+    }
+
+    private static void RunSingleInstanceTests()
+    {
+        var mutexName =
+            $@"Local\Pablo.Soundboard.Tests.{Guid.NewGuid():N}";
+
+        AssertTrue(
+            SingleInstanceGuard.TryAcquire(mutexName, out var first),
+            "first process acquires the single-instance mutex");
+        AssertTrue(
+            !SingleInstanceGuard.TryAcquire(mutexName, out var second),
+            "second process is rejected by the single-instance mutex");
+        AssertEqual(
+            null,
+            second,
+            "rejected process does not retain a mutex guard");
+
+        first!.Dispose();
+        first.Dispose();
+
+        AssertTrue(
+            SingleInstanceGuard.TryAcquire(mutexName, out var afterRelease),
+            "mutex is available after clean shutdown");
+        afterRelease!.Dispose();
+
+        Console.WriteLine(
+            "PASS single-instance acquisition, rejection, and release");
     }
 
     private static async Task RunMigrationAndOrganizationTestsAsync(

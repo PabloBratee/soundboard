@@ -323,6 +323,123 @@ dotnet build --configuration Release
 dotnet run --project .\src\Soundboard.App\Soundboard.App.csproj --configuration Release
 ```
 
+Only one normal Soundboard process may run in the same Windows user session.
+A second launch shows a concise message and exits before creating the main
+window or audio engine. Automated validation can use a unique isolated mutex
+through `SOUNDBOARD_SINGLE_INSTANCE_MUTEX`, or explicitly bypass the guard with
+`SOUNDBOARD_ALLOW_MULTIPLE_INSTANCES=1`. Those environment variables are for
+development and tests only.
+
+## Versioning and Windows releases
+
+`Directory.Build.props` is the default source for product and assembly
+metadata. A release build overrides the semantic version explicitly through
+the packaging script; the script derives only the required four-part Windows
+file version and never derives a release version from the date. Release
+`1.0.0` uses assembly and file version `1.0.0.0`, with Product, Authors, and
+Company set to Soundboard, Pablo, and Pablo.
+
+Create and verify the complete local Windows release from the repository root:
+
+```powershell
+.\build\package.ps1 -Version 1.0.0
+.\build\verify-package.ps1 -Version 1.0.0
+```
+
+Safe defaults restore, build, format-check, run `dotnet test`, run the custom
+executable harness, publish, package, compile the installer, and verify the
+artifacts. `-SkipTests` and `-SkipInstaller` are explicit development-only
+exceptions; `-Clean` removes only the repository-owned `artifacts` directory.
+Invalid semantic versions are rejected.
+
+The checked-in `win-x64.pubxml` profile publishes `Soundboard.exe` for
+`win-x64` in Release configuration as a self-contained, single-file WPF
+application. Native runtime libraries are included for self-extraction, debug
+symbols are excluded, ReadyToRun is disabled, and trimming is disabled.
+Trimming remains off because WPF XAML resources, reflection, and runtime audio
+composition are not safe candidates for size-driven removal. Native AOT is
+not used. The target computer therefore does not need a machine-wide .NET
+runtime installation.
+
+Generated files are ignored by Git and are written under:
+
+```text
+artifacts\
+├── staging\
+├── publish\
+└── release\
+    ├── Soundboard-v1.0.0-win-x64-portable.zip
+    ├── Soundboard-Setup-v1.0.0-win-x64.exe
+    ├── release-manifest.json
+    └── SHA256SUMS.txt
+```
+
+The portable archive needs only extraction; it remains self-contained but
+continues to store the library and settings under
+`%LOCALAPPDATA%\Soundboard`, not beside the executable. The Inno Setup
+installer is conventional per-user packaging. Its standard **Select
+Destination Location** page displays
+`%LOCALAPPDATA%\Programs\Soundboard` as the recommended default, but the user
+may browse to or enter another writable folder. The selected application
+folder is shown again on the Ready to Install page. Normal installation into
+a user-writable folder does not require an administrator prompt. Inno Setup 7
+is the packaging prerequisite. Compatible Inno Setup 6 may be used only when
+its compiler accepts the source and the result passes verification. The
+scripts never install or download Inno Setup.
+
+```text
+Application files:
+User-selected installation directory
+
+User data:
+%LOCALAPPDATA%\Soundboard
+```
+
+Changing the application installation directory never moves the library,
+settings, imported managed audio, waveform cache, or loudness-analysis cache.
+
+The installer's AppId and application mutex are stable across versions.
+Reinstall and upgrade initially show the previously selected installation
+directory, while keeping the destination page available so the user can
+change it. They retain one Apps & Features entry. The installer blocks while
+Soundboard is running rather than forcibly terminating it. Uninstall removes
+installer-owned program files and shortcuts but preserves
+`%LOCALAPPDATA%\Soundboard`, so the library, imported managed audio, settings,
+waveform cache, and loudness-analysis cache survive. Complete removal is the
+separate manual operation documented under **Backup and complete removal**.
+
+Portable and installer distributions include the release README,
+`THIRD-PARTY-NOTICES.txt`, and license texts for NAudio, NVorbis, Concentus,
+and Concentus.Oggfile. These dependency notices do not assign a new
+open-source license to Soundboard.
+
+The application and installer are currently unsigned. Windows SmartScreen or
+an Unknown Publisher warning may appear. A future public release should sign
+the final EXE and installer with a trusted Authenticode certificate and
+timestamping before checksums and release metadata are finalized. No
+certificate, private key, or signing password belongs in this repository.
+
+Soundboard has no automatic updater, background update check, online release
+publishing, or store integration.
+
+### Release checklist
+
+1. Confirm a clean `main` checkout and review recent commits.
+2. Update the default version and release-facing text.
+3. Confirm Inno Setup 7 and the exact NuGet dependency versions.
+4. Validate and commit the intended release source so the working tree is
+   clean and the manifest records the actual release commit.
+5. Run `.\build\package.ps1 -Version <version> -Clean`.
+6. Run `.\build\verify-package.ps1 -Version <version>`.
+7. Smoke-test the extracted portable build.
+8. Test fresh install, same-version reinstall, upgrade, uninstall data
+   preservation, and final reinstall.
+9. Perform the manual audio, hotkey, device-release, and Discord regression
+   checks without changing Discord automatically.
+10. Review `release-manifest.json`, `SHA256SUMS.txt`, and repository hygiene.
+    If testing requires a source correction, amend the release commit and
+    rebuild every artifact from the amended clean source.
+
 ## Start the audio engine
 
 1. Open **Settings → Audio devices** and select the physical microphone.
@@ -754,8 +871,8 @@ service the selected endpoints reliably at that time.
 - no microphone or system-audio monitoring through physical headphones;
 - no system-audio capture or Discord-output capture;
 - no Discord API integration or automatic Discord configuration;
-- no cloud sync, SQLite database, tray integration, startup task, installer,
-  or automatic updates.
+- no cloud sync, SQLite database, tray integration, startup task, or automatic
+  updates.
 
 Soundboard does not enable “Listen to this device,” request administrator
 rights, install or modify drivers, change Windows defaults, or change Discord

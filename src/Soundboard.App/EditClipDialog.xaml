@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Soundboard.App"
         Title="Edit clip"
+        Icon="Assets/Soundboard.ico"
         Width="900"
         Height="880"
         MinWidth="760"

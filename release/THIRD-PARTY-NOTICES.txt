@@ -1,0 +1,37 @@
+SOUNDBOARD THIRD-PARTY NOTICES
+==============================
+
+Soundboard redistributes the following third-party libraries. These notices
+apply only to those components and do not assign a new license to the
+Soundboard project.
+
+NAudio 2.3.0
+------------
+Copyright 2008-2026 Mark Heath.
+Licensed under the MIT License.
+Project: https://github.com/naudio/NAudio
+Full text: licenses\NAudio.txt
+
+NVorbis 0.10.5
+--------------
+Copyright (c) 2020 Andrew Ward.
+Licensed under the MIT License.
+Project: https://github.com/NVorbis/NVorbis
+Full text: licenses\NVorbis.txt
+
+Concentus 2.2.2
+---------------
+Copyright is held by the parties identified in the bundled license, including
+the Xiph.Org Foundation, Skype Limited, CSIRO, Microsoft Corporation, and
+individual contributors.
+Licensed under the BSD-style terms in the bundled package license.
+Project: https://github.com/lostromb/concentus
+Full text: licenses\Concentus.txt
+
+Concentus.Oggfile 1.0.7
+-----------------------
+Copyright (c) 2020 Andrew Ward and Logan Stromberg.
+Based on a fork of NVorbis.
+Licensed under the MIT License.
+Project: https://github.com/lostromb/concentus.oggfile
+Full text: licenses\Concentus.Oggfile.txt
