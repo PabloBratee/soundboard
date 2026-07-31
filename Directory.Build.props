@@ -9,6 +9,7 @@
     <Company>Pablo</Company>
     <Description>Local Windows soundboard with virtual microphone mixing</Description>
     <Copyright>Copyright © 2026 Pablo</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 </Project>

@@ -67,6 +67,8 @@ Source: "{#DistributionDir}\Soundboard.exe"; DestDir: "{app}"; \
     Flags: ignoreversion
 Source: "{#DistributionDir}\README.txt"; DestDir: "{app}"; \
     Flags: ignoreversion
+Source: "{#DistributionDir}\LICENSE.txt"; DestDir: "{app}"; \
+    Flags: ignoreversion
 Source: "{#DistributionDir}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; \
     Flags: ignoreversion
 Source: "{#DistributionDir}\licenses\*"; DestDir: "{app}\licenses"; \

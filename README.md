@@ -1,884 +1,190 @@
 # Soundboard
 
-Soundboard is a local Windows desktop application that combines a physical
-microphone with one-shot sound effects and sends the mix to a VB-CABLE virtual
-audio endpoint for Discord or a game.
+Soundboard is a local Windows desktop soundboard. It combines a physical
+microphone with one-shot sound effects and sends the mix to VB-CABLE through
+`CABLE Input`; Discord or a game then receives that combined signal from
+`CABLE Output`. Sound effects can also be monitored separately through
+physical headphones.
 
-## Current functionality
+The application works entirely on the local computer. It requires no account,
+uses no telemetry or cloud storage, and does not access the network.
 
-- discovers active Windows capture and render endpoints;
-- retains selections by Windows Core Audio endpoint ID;
-- captures the physical microphone through WASAPI shared mode;
-- mixes the live microphone with one WAV, MP3, Ogg Opus, or Ogg Vorbis sound
-  at a time;
-- optionally sends that sound alone to physical headphones or speakers through
-  a separate WASAPI shared-mode output;
-- provides microphone volume, mute, peak metering, master sound volume, and a
-  final-output meter;
-- provides independent monitor volume and monitor-output peak metering;
-- imports multiple audio files into a persistent local library;
-- supports built-in library views, user categories, favorites, preset tile
-  accents, editing, search, and persistent manual ordering;
-- supports non-destructive trim-start, trim-end, fade-in, and fade-out playback
-  settings with a decoded waveform editor;
-- supports optional per-sound loudness normalization toward a configurable
-  global target, disabled by default;
-- applies configurable bounded-lookahead sample-peak safety limiting to the
-  final virtual mix, sound-only monitor, and local preview;
-- provides local-only edited-clip preview through a safe physical monitor
-  endpoint;
-- supports drag-and-drop import, handle-based tile reordering, keyboard
-  reordering, tile playback, and remove;
-- supports one optional persistent Windows global hotkey per sound plus an
-  optional Stop Sound hotkey;
-- detects duplicate content with a SHA-256 hash;
-- presents a dark, keyboard- and screen-reader-accessible interface built on a
-  centralized WPF design system, with the soundboard on the main window and
-  advanced options in a dedicated Settings window; and
-- exposes engine, endpoint, mixer-format, overflow, playback, error, and
-  library-path diagnostics in Settings → Diagnostics.
+## Features
 
-The virtual-microphone output refuses physical speakers and headsets. The
-optional monitor output does the inverse: it accepts only active physical
-render endpoints and refuses likely VB-CABLE endpoints, with no override.
-These restrictions keep microphone audio away from physical playback devices.
+- WAV and MP3 playback
+- Ogg Opus and Ogg Vorbis playback, including `.opus` files in an Ogg
+  container
+- Persistent local sound library
+- Categories, Favorites, search, and persistent manual ordering
+- Tile accents and other tile personalization
+- Windows global hotkeys using registered key combinations
+- One-shot playback, with one sound effect active at a time
+- Non-destructive trimming, fade-in, and fade-out
+- Decoded waveform editing
+- Optional loudness normalization
+- Safety limiting on the virtual mix, monitor, and local preview
+- Sound-only monitoring through physical headphones or speakers
+- Duplicate detection using SHA-256
+- Accessible keyboard navigation and screen-reader labels
 
-## Application layout
+Soundboard never modifies imported source files. It copies supported files
+into its managed local library and stores trim, fade, category, hotkey, and
+personalization settings as metadata.
 
-The main window is built around finding and triggering sounds. Everything
-needed to play a sound is on one screen; device, monitoring, hotkey, loudness,
-and diagnostic options live in a separate Settings window.
+## Requirements
+
+- Windows x64
+- [VB-CABLE](https://vb-audio.com/Cable/) installed separately for virtual
+  microphone routing
+- Discord Krisp or similar noise suppression generally disabled so sound
+  effects are not filtered out
+
+The installer and portable release are self-contained. No separately installed
+.NET runtime is required.
+
+## Installation
+
+Download the current installer or portable archive from [this repository's
+Releases page](https://github.com/PabloBratee/soundboard/releases).
+
+### Installer
+
+Run `Soundboard-Setup-v1.0.0-win-x64.exe`. The installer is per-user and shows
+a destination page, so the installation folder can be changed. Its normal
+default under the current user's local application-data folder does not require
+administrator rights.
+
+### Portable ZIP
+
+Extract `Soundboard-v1.0.0-win-x64-portable.zip` to a writable folder and run
+`Soundboard\Soundboard.exe`. Portable mode removes the installer requirement;
+user data still stays under `%LOCALAPPDATA%\Soundboard`.
+
+The application and installer are unsigned. Windows SmartScreen may display an
+Unknown Publisher warning. Verify downloads with the included
+`SHA256SUMS.txt` before running them.
+
+## Discord routing
+
+Install VB-CABLE and select these devices:
 
 ```text
-┌──────────────────────────────────────────────────────────────┐
-│ Soundboard │ Engine state │ mic state │ Stop Sound │ ⚙        │
-├───────────────┬──────────────────────────────────────────────┤
-│ Library       │ View name · count │ Search │ Import          │
-│               ├──────────────────────────────────────────────┤
-│ All Sounds  6 │                                              │
-│ Favorites   0 │            Responsive sound tiles            │
-│ Uncategorized │                                              │
-│ <categories>  │                                              │
-├───────────────┴──────────────────────────────────────────────┤
-│ Now playing │ hotkey · monitor · limiter │ sound volume       │
-│ Status line                                                  │
-└──────────────────────────────────────────────────────────────┘
+Soundboard microphone:      Physical microphone
+Soundboard virtual output:  CABLE Input
+Discord input:              CABLE Output
+Discord output:             Physical headset
 ```
 
-**Top bar.** Application name, a compact engine-state pill, the microphone
-state, a prominent **Stop Sound** action, explicit **Start engine** and
-**Stop engine** buttons, and the Settings button. The engine pill shows
-`Stopped`, `Starting`, `Running`, `Stopping`, or `Faulted` as text alongside a
-distinct icon per state, so the state never depends on colour alone. Starting
-and stopping remain explicit user actions.
+Do not select VB-CABLE as Discord's output. That can create confusing routing
+or feedback; Discord output should remain on the physical headset.
 
-**Library sidebar.** The fixed **All Sounds**, **Favorites**, and
-**Uncategorized** views followed by user categories, each with a sound count.
-The `+` button creates a category. The `⋯` button opens the management menu
-for the selected category — rename, move earlier, move later, and delete — so
-no destructive action sits on a category row.
+Krisp and similar voice-processing features can suppress sound effects even
+when they reach VB-CABLE correctly. Disable them when using the soundboard.
+Soundboard does not change Discord or Windows audio settings.
 
-**Soundboard header.** The selected view, the visible sound count, search, and
-**Import**. When manual ordering is unavailable, the line beneath explains why.
+Optionally enable sound-only monitoring in Soundboard and select a physical
+headset or speakers. Microphone audio is never sent to this monitor path.
 
-**Status bar.** The current playing sound, the most recent global-hotkey
-action, monitoring state, limiter gain reduction while the limiter is actually
-working, the soundboard volume, and a one-line status and error area. Detailed
-technical readouts stay in Settings → Diagnostics.
+## Privacy
 
-### Settings window
+Soundboard has:
 
-**Settings** opens a separate window with five tabs: **Audio devices**,
-**Monitoring**, **Hotkeys**, **Loudness & safety**, and **Diagnostics**.
-Opening, using, and closing this window never starts, stops, or reconfigures
-the audio engine; every control keeps the same behaviour it had before. The
-window is hidden rather than destroyed when dismissed, so meters and
-registrations continue uninterrupted. `Esc` or **Close** dismisses it.
+- no telemetry or analytics;
+- no accounts;
+- no cloud sync;
+- no audio uploads; and
+- no network access.
 
-Diagnostics keeps the endpoint IDs, native and target formats, resampling and
-channel-conversion state, buffer overflows, session IDs, last engine and
-monitor messages, and the library, waveform-cache, and analysis-cache paths in
-selectable, copyable text.
+Global hotkeys use Windows `RegisterHotKey` registrations for explicitly
+configured combinations. Soundboard does not use keylogging, low-level
+keyboard hooks, raw input, keyboard polling, or simulated keystrokes.
 
-### Sound tiles
+Files and settings stay under:
 
-Each tile shows an accent strip, a play icon, the sound name, duration and
-format, its hotkey as a key-cap chip, and state badges for `Playing`,
-`Trimmed`, and normalization.
+```text
+%LOCALAPPDATA%\Soundboard
+```
 
-- Activating the main tile surface with the mouse, `Enter`, or `Space` plays
-  the sound from its edited start, or restarts it if it is already playing.
-- The drag handle reorders without ever triggering playback.
-- The star toggles Favorite.
-- The `⋯` menu holds Edit sound, Edit clip, Assign hotkey, Move earlier, Move
-  later, and Remove.
-
-Secondary controls sit above the play surface as siblings rather than nested
-inside it, so a click on one can never fall through to playback.
-
-A playing tile is marked several ways at once: a `Playing` badge, a distinct
-border colour and weight, a tinted background, and a play icon that changes to
-a restart icon. The state is also part of the tile's accessible name.
-
-Tile accents keep the existing controlled Default, Blue, Purple, Green,
-Orange, Red, Pink, and Teal presets. An accent colours the tile's top strip and
-icon surface only; it never recolours the whole tile, so text contrast stays
-constant.
-
-### Keyboard and accessibility
-
-- Tab order runs top bar → sidebar → search → import → tiles, and within a
-  tile: play surface → drag handle → favorite → actions menu.
-- Sound tiles are keyboard-activatable and focus indicators stay visible
-  against every accent preset.
-- A tile's accessible name includes its name, duration, format, category,
-  favorite state, playing state, hotkey and hotkey availability, trimmed
-  state, and normalization state, so no state is conveyed by colour, shape, or
-  icon alone.
-- Sidebar entries announce their sound count.
-- Drag-to-reorder always has Move earlier and Move later equivalents.
-- The now-playing and status lines are polite live regions; the error line is
-  assertive.
-- Icon-only buttons carry both a tooltip and an accessible name.
-- `Esc` closes dialogs and the Settings window; `Enter` activates the primary
-  action of a dialog.
-
-### Window behaviour
-
-The window opens at 1180×820, will not go below 880×620, and restores its
-saved size, position, and maximized state when they are still usable on the
-current desktop. The sound grid reflows its column count with the window. Below
-about 1000 px the sidebar narrows and drops its counts so category names stay
-readable; the play control, name, duration, and state stay visible at every
-supported size. Soundboard uses standard Windows chrome — no custom title bar,
-tray icon, always-on-top mode, or startup integration.
-
-## Technology
-
-- C# with nullable reference types and implicit usings
-- .NET 10 WPF targeting `net10.0-windows`
-- x64 Windows
-- NAudio 2.3.0, NVorbis 0.10.5, Concentus.Oggfile 1.0.7, and Windows Core
-  Audio APIs
-- SDK-style projects and Git
-
-All decoder packages are pinned to exact stable versions. WAV and MP3 retain
-the existing NAudio path. NVorbis provides managed Ogg Vorbis decoding, and
-Concentus.Oggfile plus its managed Concentus dependency provide Ogg Opus
-decoding. Soundboard does not require FFmpeg, VLC, an external converter, a
-runtime codec download, or network access.
+That directory contains `library.json`, `settings.json`, managed copies of
+imported sounds, waveform caches, and loudness-analysis caches. Back up the
+entire directory while Soundboard is closed to preserve the library. Reinstall
+and uninstall operations preserve this user-data directory by default.
 
 ## Supported audio formats
 
 Soundboard accepts:
 
-- `.wav`;
-- `.mp3`;
-- `.ogg` containing Opus audio;
-- `.ogg` containing Vorbis audio; and
-- `.opus` containing Opus audio in an Ogg container.
+- `.wav`
+- `.mp3`
+- `.ogg` containing Opus audio
+- `.ogg` containing Vorbis audio
+- `.opus` containing Opus audio in an Ogg container
 
-Ogg is a container, not an audio codec. The `.ogg` extension alone therefore
-does not establish whether a file is playable. Soundboard verifies the Ogg
-page structure and checksums, reads the identification packet, recognizes
-`OpusHead` or the Vorbis identification signature, and routes the stream to
-the matching managed decoder. This supports Discord-downloaded Ogg Opus files
-when they are genuine Ogg containers. A Vorbis stream named `.opus` is also
-reported and decoded as Vorbis based on its content.
+Ogg is a container. Soundboard inspects its contents and rejects malformed
+files, unsupported codecs, video, multiple logical streams, and unsupported
+multichannel audio. It does not require FFmpeg, VLC, external converters, or
+runtime codec downloads.
 
-An `.ogg` file containing video, multiple logical streams, an unsupported Ogg
-codec, malformed headers, invalid checksums, unsupported multichannel audio,
-or non-Ogg bytes is rejected. Soundboard does not claim support for every file
-with an `.ogg` extension.
+## Building from source
 
-## Local data and privacy
-
-Soundboard works entirely locally. It has no account, backend, cloud service,
-database, telemetry integration, or Discord API integration.
-
-Runtime data is stored under the current user's local application-data folder:
-
-```text
-%LOCALAPPDATA%\Soundboard\
-├── library.json
-├── settings.json
-├── Waveforms\
-│   └── <content-hash>-v<data-version>-b<bin-count>.json
-├── Analysis\
-│   └── <analysis-key>.json
-└── Sounds\
-    ├── <generated-id>.wav
-    ├── <generated-id>.mp3
-    ├── <generated-id>.ogg
-    └── <generated-id>.opus
-```
-
-`library.json` uses schema version 6. It stores user categories with a stable
-GUID, display name, normalized sort order, and UTC creation date. Sound records
-contain a stable GUID, display name, managed filename, original filename,
-detected container and codec, original extension, duration, UTC import date,
-normalized manual sort order, SHA-256 content hash, optional hotkey, optional
-category GUID, favorite state, and a controlled tile-accent preset. Each sound
-also stores integer-millisecond trim start, optional trim end, fade-in
-duration, and fade-out duration. A null trim end unambiguously means the full
-original decoded duration. Each sound also stores whether loudness
-normalization is enabled; cached measured loudness is derived data and is not
-stored in the library document.
-`settings.json` stores the global-hotkey enabled state and optional Stop Sound
-hotkey alongside the existing audio and window settings. It also stores the
-global normalization target, safety-limiter enabled state, and limiter
-ceiling. Defaults are `-16 LUFS`, enabled, and `-1.0 dBFS`. JSON saves use a
-temporary file and atomic replacement. A malformed library file is preserved
-as `library.malformed-<timestamp>.json` before Soundboard creates an empty
-library.
-
-Version 1 through version 5 libraries migrate to schema version 6 during
-startup.
-Their existing sound sequence, stable IDs, names, managed filenames, original
-filenames, original detected durations, content hashes, and hotkeys are
-retained. Existing sounds default to full-duration playback with no fades. New
-organization metadata defaults to Uncategorized, not favorite, and the
-Default tile accent. Existing WAV and MP3 entries receive inferred container,
-codec, and original-extension values. Invalid detected-format metadata falls
-back safely with a concise startup warning instead of dropping an otherwise
-valid sound. Invalid clip metadata is reset to full-duration playback with no
-fades, and a concise startup warning is shown without dropping the sound or
-touching its audio. Sound and category sort orders are normalized to unique
-consecutive values while preserving the established sequence. The migrated
-document is then saved with the same atomic replacement used by normal library
-mutations. A future schema version is loaded conservatively and is never
-silently rewritten as version 6. Existing and newly imported sounds default to
-loudness normalization disabled.
-
-Importing copies audio into `Sounds` with a generated filename. Soundboard
-never modifies or deletes the original source file. Removing a tile deletes
-only its managed copy. Clip editing never modifies or re-encodes either file,
-never creates an edited audio copy, and never changes the content hash used
-for duplicate detection.
-
-`Waveforms` contains only bounded peak-amplitude data derived from decoded PCM,
-not decoded audio. The cache is rebuildable and is never required for
-playback. A missing or corrupt cache entry is regenerated when the clip editor
-is opened. Cache writes are atomic, waveform generation does not rewrite
-`library.json`, and startup maintenance removes orphaned cache entries where
-possible. A cache failure is shown as a retryable warning while normal
-playback remains available.
-
-`Analysis` contains only versioned loudness measurements and their trim/fade
-cache keys. It never contains decoded audio. The key includes the source
-content hash, trim start/end, fade-in/out, and analysis algorithm version, so
-editing a clip selects a different result automatically. Writes are atomic,
-simultaneous identical requests are deduplicated, corrupt entries are ignored
-and regenerated, and orphaned entries are removed where practical. Analysis
-cache activity never rewrites `library.json` and is never needed when
-normalization is disabled.
-
-### Backup and complete removal
-
-To back up the soundboard, close the app and copy the complete
-`%LOCALAPPDATA%\Soundboard` folder. Restore the complete folder while the app
-is closed so metadata and managed audio stay together.
-
-To remove all local Soundboard data, close the app and delete
-`%LOCALAPPDATA%\Soundboard`. The next launch starts with an empty library and
-default settings. Original source audio elsewhere on the computer is
-unaffected.
-
-## VB-CABLE prerequisite
-
-Install VB-CABLE separately and complete any restart requested by its installer
-before using the audio engine. Soundboard does not install or configure an
-audio driver.
-
-VB-CABLE names its two sides from the perspective of normal audio
-applications:
-
-- `CABLE Input` is a render endpoint. Soundboard writes its microphone and
-  sound mix here.
-- `CABLE Output` is the related capture endpoint. Discord or a game selects
-  this as its microphone.
-
-```text
-Physical microphone ─┐
-                     ├─ Soundboard mixer → CABLE Input
-One sound effect ────┘
-
-One sound effect ────── Sound-only monitor mixer → Physical headphones
-
-CABLE Output → Discord or game microphone
-Discord or game output → Physical headphones
-```
-
-Friendly names can vary. Soundboard stores endpoint IDs and will not start
-unless it finds both a likely VB-CABLE render endpoint and a related active
-VB-CABLE capture endpoint.
-
-## Restore, build, and run
-
-From the repository root:
+Development requires Windows, the .NET 10 SDK, and an x64-capable environment.
 
 ```powershell
 dotnet restore
 dotnet build --configuration Release
+dotnet test --configuration Release
+dotnet run --project .\tests\Soundboard.App.Tests\Soundboard.App.Tests.csproj --configuration Release --no-build --no-restore
+```
+
+Run the application from source with:
+
+```powershell
 dotnet run --project .\src\Soundboard.App\Soundboard.App.csproj --configuration Release
 ```
 
-Only one normal Soundboard process may run in the same Windows user session.
-A second launch shows a concise message and exits before creating the main
-window or audio engine. Automated validation can use a unique isolated mutex
-through `SOUNDBOARD_SINGLE_INSTANCE_MUTEX`, or explicitly bypass the guard with
-`SOUNDBOARD_ALLOW_MULTIPLE_INSTANCES=1`. Those environment variables are for
-development and tests only.
+The custom executable test harness is required in addition to `dotnet test`
+because the test project contains dependency-free integration checks that run
+as a normal executable.
 
-## Versioning and Windows releases
+## Packaging
 
-`Directory.Build.props` is the default source for product and assembly
-metadata. A release build overrides the semantic version explicitly through
-the packaging script; the script derives only the required four-part Windows
-file version and never derives a release version from the date. Release
-`1.0.0` uses assembly and file version `1.0.0.0`, with Product, Authors, and
-Company set to Soundboard, Pablo, and Pablo.
-
-Create and verify the complete local Windows release from the repository root:
+Inno Setup 7 is required to build the installer. From a clean checkout:
 
 ```powershell
 .\build\package.ps1 -Version 1.0.0
 .\build\verify-package.ps1 -Version 1.0.0
 ```
 
-Safe defaults restore, build, format-check, run `dotnet test`, run the custom
-executable harness, publish, package, compile the installer, and verify the
-artifacts. `-SkipTests` and `-SkipInstaller` are explicit development-only
-exceptions; `-Clean` removes only the repository-owned `artifacts` directory.
-Invalid semantic versions are rejected.
-
-The checked-in `win-x64.pubxml` profile publishes `Soundboard.exe` for
-`win-x64` in Release configuration as a self-contained, single-file WPF
-application. Native runtime libraries are included for self-extraction, debug
-symbols are excluded, ReadyToRun is disabled, and trimming is disabled.
-Trimming remains off because WPF XAML resources, reflection, and runtime audio
-composition are not safe candidates for size-driven removal. Native AOT is
-not used. The target computer therefore does not need a machine-wide .NET
-runtime installation.
-
-Generated files are ignored by Git and are written under:
-
-```text
-artifacts\
-├── staging\
-├── publish\
-└── release\
-    ├── Soundboard-v1.0.0-win-x64-portable.zip
-    ├── Soundboard-Setup-v1.0.0-win-x64.exe
-    ├── release-manifest.json
-    └── SHA256SUMS.txt
-```
-
-The portable archive needs only extraction; it remains self-contained but
-continues to store the library and settings under
-`%LOCALAPPDATA%\Soundboard`, not beside the executable. The Inno Setup
-installer is conventional per-user packaging. Its standard **Select
-Destination Location** page displays
-`%LOCALAPPDATA%\Programs\Soundboard` as the recommended default, but the user
-may browse to or enter another writable folder. The selected application
-folder is shown again on the Ready to Install page. Normal installation into
-a user-writable folder does not require an administrator prompt. Inno Setup 7
-is the packaging prerequisite. Compatible Inno Setup 6 may be used only when
-its compiler accepts the source and the result passes verification. The
-scripts never install or download Inno Setup.
-
-```text
-Application files:
-User-selected installation directory
-
-User data:
-%LOCALAPPDATA%\Soundboard
-```
-
-Changing the application installation directory never moves the library,
-settings, imported managed audio, waveform cache, or loudness-analysis cache.
-
-The installer's AppId and application mutex are stable across versions.
-Reinstall and upgrade initially show the previously selected installation
-directory, while keeping the destination page available so the user can
-change it. They retain one Apps & Features entry. The installer blocks while
-Soundboard is running rather than forcibly terminating it. Uninstall removes
-installer-owned program files and shortcuts but preserves
-`%LOCALAPPDATA%\Soundboard`, so the library, imported managed audio, settings,
-waveform cache, and loudness-analysis cache survive. Complete removal is the
-separate manual operation documented under **Backup and complete removal**.
-
-Portable and installer distributions include the release README,
-`THIRD-PARTY-NOTICES.txt`, and license texts for NAudio, NVorbis, Concentus,
-and Concentus.Oggfile. These dependency notices do not assign a new
-open-source license to Soundboard.
-
-The application and installer are currently unsigned. Windows SmartScreen or
-an Unknown Publisher warning may appear. A future public release should sign
-the final EXE and installer with a trusted Authenticode certificate and
-timestamping before checksums and release metadata are finalized. No
-certificate, private key, or signing password belongs in this repository.
-
-Soundboard has no automatic updater, background update check, online release
-publishing, or store integration.
-
-### Release checklist
-
-1. Confirm a clean `main` checkout and review recent commits.
-2. Update the default version and release-facing text.
-3. Confirm Inno Setup 7 and the exact NuGet dependency versions.
-4. Validate and commit the intended release source so the working tree is
-   clean and the manifest records the actual release commit.
-5. Run `.\build\package.ps1 -Version <version> -Clean`.
-6. Run `.\build\verify-package.ps1 -Version <version>`.
-7. Smoke-test the extracted portable build.
-8. Test fresh install, same-version reinstall, upgrade, uninstall data
-   preservation, and final reinstall.
-9. Perform the manual audio, hotkey, device-release, and Discord regression
-   checks without changing Discord automatically.
-10. Review `release-manifest.json`, `SHA256SUMS.txt`, and repository hygiene.
-    If testing requires a source correction, amend the release commit and
-    rebuild every artifact from the amended clean source.
-
-## Start the audio engine
-
-1. Open **Settings → Audio devices** and select the physical microphone.
-2. In the same tab, select the standard VB-CABLE virtual render endpoint,
-   normally `CABLE Input (VB-Audio Virtual Cable)`.
-3. Optionally open **Settings → Monitoring**, enable **Monitor sounds through
-   headphones**, and select a physical monitor output, such as
-   `Speakers (2- Razer BlackShark V2 Pro)`.
-4. Close Settings and select **Start engine** in the top bar.
-5. Speak and verify the microphone meter in Settings → Audio devices and the
-   final-output meter in Settings → Diagnostics move. The monitor meter must
-   remain idle because microphone audio is never monitored.
-6. Import sounds and activate a sound tile.
-7. Select **Stop engine** before changing devices, changing the monitor enable
-   state, or refreshing devices. Device selectors are disabled while the
-   engine is running.
-
-Soundboard restores available saved endpoints. If the saved microphone is
-unavailable, it uses the current default microphone. If the saved output is
-unavailable, it prefers the standard `CABLE Input` render endpoint. It also
-restores microphone volume, microphone mute, sound volume, and practical
-window bounds. Monitoring enable state, the monitor endpoint ID, and monitor
-volume are also restored. If the saved monitor endpoint is unavailable or is
-now identified as virtual, Soundboard falls back to the current default active
-non-virtual render endpoint, then another active physical render endpoint. The
-audio engine never starts automatically.
-
-Soundboard does not change Windows default recording or playback devices.
-
-## Sound-only headphone monitoring
-
-Monitoring is disabled by default on a new installation. When enabled,
-Soundboard opens the selected physical render endpoint in WASAPI shared mode
-when the engine starts. It sends only the current soundboard clip to that
-device:
-
-```text
-To Discord:
-Microphone + Soundboard → CABLE Input
-
-To your headphones:
-Soundboard only → Physical headset or speakers
-```
-
-Microphone monitoring is intentionally unsupported. The monitor mixer has no
-microphone input, loopback capture, system audio, Discord audio, game audio, or
-VB-CABLE capture input. Soundboard never enables Windows **Listen to this
-device**.
-
-The selected virtual and monitor endpoints can have different sample rates and
-channel counts. Each sound gets a separate decoded source and is normalized
-independently to a mono or stereo 32-bit floating-point mixer target derived
-from that endpoint's own mix format. A monitor endpoint exposing more than two
-channels is rejected with a clear warning rather than reinterpreted.
-
-Monitor volume ranges from 0% to 200% and affects only local monitoring. Sound
-volume affects the copy sent to Discord or a game. Setting monitor volume to
-0% therefore silences local sound playback without silencing the virtual
-microphone path.
-
-The monitor enable setting, monitor selector, and device refresh are locked
-while the engine runs; monitor volume remains adjustable. Settings changes
-never restart the engine automatically. Soundboard never changes the Windows
-default render device.
-
-If the physical monitor is missing, disconnected, unsupported, or fails to
-initialize or play, monitoring is disabled for that engine session and a
-warning is shown. The primary microphone-plus-sound path remains running when
-technically possible. Stop the engine, select another physical output, and
-start it again. Soundboard does not silently switch outputs while running.
-
-## Organize and manage sounds
-
-Use **Import sounds** to select multiple `.wav`, `.mp3`, `.ogg`, and `.opus`
-files, or drag files onto the soundboard area. The picker and drag-and-drop
-path use the same decoder factory as playback. Every candidate is opened,
-inspected by content, decoded far enough to prove it has readable audio,
-checked for a valid duration, hashed with streaming SHA-256, and copied with
-streaming I/O into the managed library. The original bytes and sensible
-original extension are preserved; files are never converted to WAV or MP3.
-Zero-byte, corrupt, unsupported, unreadable, over-1-GiB, and over-12-hour files
-are skipped without blocking valid files. New imports are Uncategorized, not
-favorite, use the Default tile accent, and appear at the end of the global
-manual order. File drops onto the general soundboard area use the same
-defaults. Category-targeted file drop is not currently implemented; assign
-the category through **Edit** after import.
-
-If the same content is imported again, Soundboard does not create another
-managed copy. The summary identifies the existing sound by display name.
-Duplicate detection is based on the exact original source bytes, not the
-source path, filename, extension, or audible similarity. Reimporting the same
-Discord `.ogg` is skipped, while a separately encoded MP3 with similar audio
-is a different file.
-
-The left library panel contains three fixed, non-deletable views:
-
-- **All Sounds** shows the complete library in global manual order.
-- **Favorites** shows favorite sounds without changing their global positions.
-- **Uncategorized** shows sounds with no category assignment.
-
-User categories are a single flat level below those built-in views. Category
-names are trimmed, limited to 60 characters, and unique case-insensitively.
-The `+` button in the sidebar header creates a category. The `⋯` button next
-to it opens the management menu for the currently selected category, with
-**Rename category**, **Move category earlier**, **Move category later**, and
-**Delete category**; it is disabled while a built-in view is selected.
-Built-in views remain fixed. Renaming a category retains its position.
-Deleting asks for confirmation, moves its sounds to Uncategorized without
-changing their relative order, and never deletes their managed audio files.
-
-Each tile has a star control with an accessible **Add to favorites** or
-**Remove from favorites** name. Favorite changes persist immediately and the
-Favorites view refreshes immediately. A filtered-out sound retains its global
-hotkey and remains playable through that hotkey while the app and audio engine
-are running.
-
-Use **Edit sound…** in a tile's `⋯` menu to change its trimmed display name,
-category, favorite state, and one of the controlled Default, Blue, Purple,
-Green, Orange, Red, Pink, or Teal accent presets in one atomic metadata
-update. The dialog also shows the original filename, duration, concise
-detected format (`WAV`, `MP3`, `OGG · Opus`, or `OGG · Vorbis`), and assigned
-hotkey without editing them. Tiles show the same format label. Hotkeys remain
-in the dedicated hotkey dialog. Editing does not rename the managed audio file
-and does not stop a playing sound; its stable sound ID and visible Playing
-state remain attached to the same tile.
-
-When a view has nothing to show, the grid explains why and offers the single
-most useful next action: **Import Sounds** for an empty library or category,
-**Clear search** when a search matches nothing, and **Show all sounds** when
-Favorites is empty. Import progress replaces the same area. Raw exception text
-never appears in these states; failures stay on the status line.
-
-### Edit a clip non-destructively
-
-Use **Edit clip…** in a tile's `⋯` menu to view the entire original decoded
-waveform, original filename, detected format, original duration, proposed trim
-start and end, effective playable duration, and fade-in and fade-out lengths.
-The waveform always represents the complete original source. Excluded audio
-is dimmed, amber regions show fades, and the two vertical handles select
-the playable region.
-
-Drag either handle, or use the accessible adjustment buttons. In the waveform,
-press **S** or **E** to select the start or end handle, then use **Left** or
-**Right**. The normal increment is 100 ms; hold **Shift** for 10 ms or
-**Ctrl** for one second. Separate keyboard-focusable buttons move both trim
-handles and increase or decrease both fades. A playable clip is always at
-least 100 ms. Fades cannot be negative, extend beyond the trimmed clip, or
-overlap each other.
-
-**Play Preview** uses the proposed unsaved values and plays once through the
-currently selected physical monitor endpoint in Windows shared mode. Preview
-has its own decoder and output session. It never enters the main virtual
-mixer, never uses `CABLE Input`, never includes microphone, Discord, game, or
-system audio, and does not change the active sound tile. Therefore preview is
-never transmitted to Discord. When the main engine is running, preview uses
-only the already selected safe physical endpoint and never stops or switches
-the engine. When the engine is stopped and that selection is unavailable, it
-may use the current default active non-virtual render endpoint. If no safe
-physical endpoint exists, preview reports an error.
-
-**Save** validates and atomically persists the proposed values while preserving
-the stable sound ID, managed filename, source duration, content hash, hotkey,
-category, favorite state, accent, and sort order. If that sound is playing,
-Save stops it first and does not restart it. **Cancel** stops preview and
-changes no metadata or main playback. **Reset** proposes full
-original-duration playback with zero fades; it remains unsaved until Save is
-selected. Tiles show effective duration and a textual **Trimmed** indicator
-whenever trim or fade edits are active. The editor continues to show the
-original duration.
-
-### Loudness normalization and safety limiting
-
-**Normalize loudness** is optional for each sound and is disabled by default.
-The clip editor can analyze the proposed unsaved trim and fade values, shows
-the measured integrated loudness and maximum decoded sample peak, and previews
-the proposed normalization locally. Analysis uses a managed-code
-BS.1770-style gated integrated loudness calculation with K-weighting,
-approximately 400 ms blocks with 75% overlap, an absolute gate near
-`-70 LUFS`, and a relative gate near `-10 LU`. This wording does not claim
-formal EBU certification.
-
-The global target defaults to `-16 LUFS` and can be set from `-24 LUFS` to
-`-10 LUFS`. Requested gain is:
-
-```text
-target LUFS - measured integrated LUFS
-```
-
-Applied gain is limited to a maximum `+12 dB` boost and `-24 dB` attenuation.
-The editor shows both values and warns when the clamp prevents reaching the
-target. Silence, clips shorter than the useful 400 ms window, invalid samples,
-missing files, decoder failures, and unsupported channel counts remain
-non-normalizable. Saving with normalization enabled requires a valid analysis
-whose key exactly matches the proposed trim and fades. Changing an edit marks
-the displayed result stale; choose **Reanalyze** before saving. **Reset**
-changes only trim and fades and does not silently toggle normalization.
-
-Tile clicks and global hotkeys share the same trigger path. If a normalized
-sound has no matching cached result, Soundboard analyzes it asynchronously and
-starts it only if that trigger is still the newest accepted request. A newer
-sound selection supersedes the older pending trigger. Analysis failure leaves
-the microphone engine running and does not silently play the sound
-unnormalized. Tiles show **Normalized** only for a valid matching result and
-**Normalization needs analysis** otherwise.
-
-The sound path order is:
-
-```text
-Decode → trim/fades → optional normalization gain
-→ existing sound volume → mix → final safety limiter → meter → output
-```
-
-Normalization is applied identically before the virtual and monitor branches'
-output conversion and affects sound audio only. Microphone audio is never
-normalized. The final virtual limiter follows the microphone-plus-sound mixer;
-the monitor and preview use separate limiter instances after their sound-only
-paths. Microphone audio remains excluded from both local paths.
-
-The safety processor is a bounded-lookahead **sample-peak limiter**, not a
-true-peak limiter. It defaults to a `-1.0 dBFS` ceiling, uses exactly `5 ms`
-of lookahead and an approximately `100 ms` exponential release, and therefore
-adds exactly `5 ms` of processing latency while enabled. Its allowed ceiling
-range is `-6.0 dBFS` to `-0.1 dBFS`. Disabling it bypasses gain limiting; it
-does not open another output or decoder. Diagnostics show current and maximum
-gain reduction for virtual and monitor output, preview gain reduction where
-available, and rejected non-finite sample counts.
-
-All normalization and limiting are performed during playback. Soundboard
-never rewrites or re-encodes the managed or original audio, never creates a
-normalized copy, never changes the content hash or duplicate detection, and
-never changes Windows or Discord audio settings.
-
-Search is a case-insensitive substring match against display name, original
-filename, and category name. The selected library view is applied first,
-search second, and persistent manual order last. The interface displays the
-selected view, visible count, total count, and distinct empty messages for an
-empty library, empty category, empty Favorites view, and search with no
-matches.
-
-In All Sounds, drag a tile's dedicated `↕` handle to change the global sound
-sequence. In Uncategorized or a user category, dragging changes the relative
-order of sounds in that view while preserving sounds outside it. Search must
-be empty. Reordering is disabled in Favorites and while search is active, with
-an explanation shown above the tiles. A cancelled drag or a drop outside a
-tile changes nothing; only a completed valid drop is saved. Right-click a tile
-or press Shift+F10 and choose **Move earlier** or **Move later** for the
-keyboard-accessible alternative. Tile clicks continue to play sounds and tile
-buttons remain independent from the drag handle.
-
-Remove asks for confirmation and deletes metadata plus the managed copy; the
-original imported file is never modified. If managed-file deletion fails,
-Soundboard reports the failure and rolls the library back instead of claiming
-success.
-
-Missing or unreadable managed files are skipped during startup with a warning
-that identifies the metadata and local storage path. Restore the complete
-library from backup or repair the affected metadata while Soundboard is
-closed.
-
-## One-shot playback
-
-Each explicit tile selection starts that sound from its configured trim start.
-The sound plays once, stops at its configured trim end, and never loops or
-automatically restarts. With default clip settings, this is the full original
-decoded duration.
-
-- Selecting the playing tile explicitly stops its current session and starts a
-  new session from the configured trim start.
-- Selecting another tile stops the current sound and starts the selected sound.
-- Only one sound effect is active at a time.
-- **Stop sound** stops the effect without stopping the microphone engine.
-- Selecting a tile while the engine is stopped shows an instruction to start
-  the engine; it never starts routing silently.
-- Natural completion returns the tile to idle while the microphone continues.
-
-Each session carries the stable library sound ID and a monotonically increasing
-session ID. Mixer end-of-stream queues completion only once. Completion removes
-the mixer input, disposes all decoder, packet-reader, and file resources, and
-clears playback only when the completed session is still current. A stale
-callback from a stopped or replaced session cannot alter a newer session.
-Virtual output and optional monitoring open independent decoded sources within
-one logical session and apply the same immutable clip and normalization
-settings. Trimming, fades, and optional normalization occur before per-output
-resampling/channel conversion and final volume, so microphone audio is
-unaffected. The virtual final limiter processes the complete microphone-plus-
-sound mix; the monitor limiter sees sound only. Monitoring does not open a
-second decoder when it is disabled. The virtual branch remains the
-authoritative completion owner at the edited trim end. Opus pre-skip and final
-granule trimming are applied, and neither Opus nor Vorbis pads end-of-stream
-with indefinite silence.
-
-## Global soundboard hotkeys
-
-Global hotkeys let a sound tile be triggered while Notepad, Discord, a game, or
-another application has focus. Soundboard must remain running for its hotkeys
-to be active. The audio engine must also be started manually before a sound
-hotkey can play audio; a hotkey never starts the engine, opens devices, changes
-Windows settings, or steals foreground focus.
-
-Each sound has an **Assign hotkey** action and shows one of these explicit
-states:
-
-- assigned and registered;
-- assigned but unavailable;
-- assigned while global hotkeys are disabled; or
-- not assigned.
-
-The assignment dialog captures one proposed combination only while its capture
-area has focus. Select **Save** to ask Windows to register it, **Clear hotkey**
-to remove the assignment, or **Cancel** (or press Escape) to leave the previous
-assignment unchanged. Renaming a sound preserves its stable ID and hotkey.
-Removing a sound unregisters its binding before its managed metadata and audio
-copy are removed.
-
-The compact **Global hotkeys** section provides:
-
-- **Enable global hotkeys**, which unregisters every binding when disabled but
-  preserves the assignments in JSON for re-registration when enabled again;
-- an optional **Stop current sound** hotkey, which stops only the sound effect
-  and leaves the microphone engine and both configured outputs running;
-- **Retry unavailable hotkeys**, which makes one explicit retry without
-  continuously polling in the background; and
-- assigned, registered, and unavailable state text plus registration counts.
-
-Supported combinations use Ctrl, Alt, Shift, and/or the Windows key with
-letters, numbers, numpad digits, arrows, navigation keys, Escape, Enter, Space,
-Tab, Backspace, Delete, or F1–F12. These ordinary keys require at least one
-modifier so Soundboard cannot claim normal typing keys. F13–F24 may be assigned
-without a modifier for dedicated macro-key devices. Modifier-only and unknown
-keys are rejected.
-
-Soundboard rejects duplicates between sounds and the Stop Sound action before
-asking Windows. Windows may also refuse a combination because it is reserved
-or already owned by another application. A failed new assignment is not
-persisted, and a failed replacement restores the previous working assignment
-where Windows permits it. Persisted assignments that are unavailable during
-startup remain assigned and can be retried later; their sound tiles still work
-with the mouse.
-
-Registrations use the Windows `RegisterHotKey` API with `MOD_NOREPEAT`.
-Therefore only explicitly registered combinations produce callbacks, and
-holding a combination does not continuously restart a sound. Soundboard uses
-`UnregisterHotKey` when a binding is cleared, removed, disabled, replaced, or
-closed.
-
-Soundboard does not use a low-level keyboard hook, raw keyboard input, keyboard
-polling, simulated keystrokes, or administrator privileges. It does not record
-keypress history, log unassigned keys, capture text typed into other
-applications, or send input to Discord or games. Hotkey capture occurs only
-inside the visible assignment dialog while that dialog has focus.
-
-## Configure Discord manually
-
-Soundboard does not change Discord settings. In Discord **Voice & Video**:
-
-- **Input device:** `CABLE Output (VB-Audio Virtual Cable)`
-- **Output device:** the physical Razer headset
-- **Krisp / noise suppression:** disabled
-
-Krisp and similar voice processing can suppress sound effects even when they
-reach VB-CABLE correctly. Keep Discord output on the physical headset; do not
-route Discord output back to VB-CABLE.
-
-## Troubleshooting
-
-### Missing VB-CABLE endpoints
-
-Both a render endpoint such as `CABLE Input` and a capture endpoint such as
-`CABLE Output` must be active. Complete VB-CABLE installation and any required
-Windows restart, then select **Refresh devices**. Soundboard neither simulates
-a virtual endpoint nor installs a driver.
-
-### Device in use or disconnected
-
-Stop other applications that may hold the endpoint exclusively, then restart
-the Soundboard engine. Device removal or stream failures are shown in the
-status area. A monitor-only failure does not intentionally stop the virtual
-microphone. Device refresh is available only while the engine is stopped.
-
-### Monitor output is rejected
-
-The monitor selector contains active non-virtual render endpoints. A saved
-endpoint that appears to be VB-CABLE is rejected and replaced with a safe
-physical fallback. The monitor output cannot match the virtual output and
-there is no override for virtual monitor endpoints.
-
-### Unsupported format
-
-The library accepts WAV, MP3, Ogg Opus, and Ogg Vorbis sources. Renaming
-non-Ogg data to `.ogg` does not make it valid. If an Ogg file is rejected,
-confirm that it is an audio-only Ogg container with Opus or Vorbis, then
-download or export it again if it is truncated or corrupt. WebM Opus, Ogg
-video, multiple-stream Ogg, and other Ogg codecs are not supported. No
-external converter is bundled.
-
-The mixer supports mono or stereo microphone/file sources and mono or stereo
-output. Multichannel Ogg input and multichannel output are rejected rather
-than silently reinterpreted.
-
-### Crackling or growing latency
-
-The microphone bridge is bounded to 250 ms. On overflow it clears stale audio
-and increments the diagnostic overflow count instead of allowing latency to
-grow indefinitely. Persistent overflows indicate the machine or driver cannot
-service the selected endpoints reliably at that time.
-
-## Current limitations
-
-- one microphone, one VB-CABLE render endpoint, and one optional physical
-  sound-only monitor endpoint;
-- one WAV, MP3, Ogg Opus, or Ogg Vorbis sound effect at a time;
-- mono/stereo sources and mono/stereo output only;
-- one optional flat category per sound; no nested folders or tags;
-- preset tile accents only; no arbitrary color picker or custom tile images;
-- category-targeted file drop is not implemented;
-- no hotkey profiles, per-game profiles, multiple trim regions, silence
-  detection, automatic trimming, destructive editing, edited-file export, or
-  destructive normalization;
-- waveform preview does not currently draw a live playback cursor;
-- the sound grid is not UI-virtualized, because WPF has no built-in
-  virtualizing wrap panel that preserves tile drag-and-drop; very large
-  libraries therefore build every tile up front;
-- the interface is dark only; there is no light theme or theme switch;
-- Soundboard asks Windows for the dark native title bar, but some Windows
-  builds ignore the request and keep the light caption;
-- sample-peak limiting only; no oversampled true-peak limiting, compressor,
-  multiband dynamics, gate, equalizer, automatic microphone gain, noise
-  reduction, pitch shifting, or time stretching;
-- no microphone or system-audio monitoring through physical headphones;
-- no system-audio capture or Discord-output capture;
-- no Discord API integration or automatic Discord configuration;
-- no cloud sync, SQLite database, tray integration, startup task, or automatic
-  updates.
-
-Soundboard does not enable “Listen to this device,” request administrator
-rights, install or modify drivers, change Windows defaults, or change Discord
-settings automatically. Sound-only monitoring has not been claimed as audibly
-verified by automated build validation; perform the manual headset and Discord
-checks on the target computer before relying on it. The same applies to audible
-trim/fade quality and preview routing: automated tests verify provider
-boundaries and reject virtual preview endpoints, but do not substitute for a
-headset-and-Discord check on the target machine.
+The packaging script restores, builds, format-checks, runs tests and the custom
+harness, publishes a self-contained single-file x64 application, creates the
+portable ZIP and per-user installer, and generates the release manifest and
+SHA-256 checksums. Generated files are written under the ignored `artifacts`
+directory.
+
+## Limitations
+
+- Windows x64 only
+- One sound effect at a time
+- VB-CABLE remains a separate prerequisite
+- No automatic updates
+- No code signing yet
+- No microphone monitoring through the application
+- No general system-audio capture
+- Mono and stereo sources and outputs only
+- No Discord API integration or automatic Discord configuration
+- No tray integration or startup task
+
+The audio engine never starts automatically. Soundboard does not install or
+modify drivers, change Windows default audio devices, or change Discord
+settings.
+
+## License
+
+Soundboard source code is available under the [MIT License](LICENSE).
+Third-party dependencies retain their own licenses; distribution notices and
+license texts are under [`release`](release). The installer and portable build
+are unsigned.
+
+The MIT License does not grant trademark rights to the Soundboard name, logo,
+or branding beyond uses necessary to describe the software and exercise the
+license. No third-party component is relicensed by this project.

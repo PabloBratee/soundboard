@@ -3,8 +3,32 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
-# dotenv files
+# Soundboard user data and local caches. These may contain private audio,
+# device identifiers, library metadata, or personal settings and must never
+# be committed, even if copied into a nested development folder.
+**/library.json
+**/settings.json
+**/Sounds/
+**/Waveforms/
+**/Analysis/
+
+# Local secrets, certificates, crash data, and generated release output.
 .env
+.env.*
+*.dmp
+*.dump
+*.crash
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+artifacts/
+**/bin/
+**/obj/
+*.pdb
+*.log
 
 # User-specific files
 *.rsuser
@@ -26,6 +50,8 @@ mono_crash.*
 [Rr]eleases/
 !release/
 !release/**
+!docs/releases/
+!docs/releases/**
 x64/
 x86/
 [Ww][Ii][Nn]32/
@@ -65,7 +91,6 @@ BenchmarkDotNet.Artifacts/
 # .NET
 project.lock.json
 project.fragment.lock.json
-artifacts/
 
 # Tye
 .tye/

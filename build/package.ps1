@@ -182,6 +182,7 @@ $requiredSources = @(
     $publishProfile
     $installerSource
     (Join-Path $repositoryRoot 'Directory.Build.props')
+    (Join-Path $repositoryRoot 'LICENSE')
     (Join-Path $repositoryRoot 'src\Soundboard.App\Assets\Soundboard.ico')
     (Join-Path $releaseSource 'README.txt')
     (Join-Path $releaseSource 'THIRD-PARTY-NOTICES.txt')
@@ -356,6 +357,9 @@ try {
     Set-Content -LiteralPath (
         Join-Path $portableRoot 'README.txt') -Value $portableReadme -Encoding utf8
     Copy-Item -LiteralPath (
+        Join-Path $repositoryRoot 'LICENSE'
+    ) -Destination (Join-Path $portableRoot 'LICENSE.txt')
+    Copy-Item -LiteralPath (
         Join-Path $releaseSource 'THIRD-PARTY-NOTICES.txt'
     ) -Destination $portableRoot
     Copy-Item -LiteralPath (
@@ -418,6 +422,7 @@ command. Use -SkipInstaller only for an explicitly portable-only build.
 
     $manifest = [ordered]@{
         product = 'Soundboard'
+        projectLicense = 'MIT'
         version = $Version
         gitCommit = $gitCommit
         gitWorkingTreeDirty = $gitWorkingTreeDirty

@@ -96,3 +96,14 @@ use a trusted Authenticode certificate with timestamping.
 
 Soundboard 1.0.0 does not include automatic updates or background update
 checks.
+
+PROJECT LICENSE
+---------------
+
+Soundboard source code and the project-owned application are licensed under
+the MIT License. See LICENSE.txt included with this distribution.
+
+Third-party components retain their own licenses. See
+THIRD-PARTY-NOTICES.txt and the licenses directory. The MIT License does not
+grant trademark rights to the Soundboard name, logo, or branding beyond uses
+necessary to describe the software and exercise the license.

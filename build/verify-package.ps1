@@ -148,6 +148,7 @@ Assert-Condition (
 
 $expectedZipFiles = @(
     'Soundboard/Soundboard.exe'
+    'Soundboard/LICENSE.txt'
     'Soundboard/README.txt'
     'Soundboard/THIRD-PARTY-NOTICES.txt'
     'Soundboard/licenses/NAudio.txt'
@@ -254,6 +255,8 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw |
     ConvertFrom-Json
 Assert-Condition ($manifest.product -eq 'Soundboard') (
     'Release manifest has the wrong product.')
+Assert-Condition ($manifest.projectLicense -eq 'MIT') (
+    'Release manifest does not identify the project license as MIT.')
 Assert-Condition ($manifest.version -eq $Version) (
     'Release manifest has the wrong version.')
 Assert-Condition ($manifest.gitCommit -match '^[0-9a-f]{40}$') (
