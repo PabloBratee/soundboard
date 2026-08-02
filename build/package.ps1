@@ -29,16 +29,58 @@ function Invoke-NativeCommand {
     }
 }
 
+function Get-RegisteredInnoCompilerCandidates {
+    $appPathKeys = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\ISCC.exe'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\ISCC.exe'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\ISCC.exe'
+    )
+    foreach ($appPathKey in $appPathKeys) {
+        $key = Get-Item -LiteralPath $appPathKey -ErrorAction SilentlyContinue
+        if ($null -ne $key) {
+            $registeredExecutable = $key.GetValue('')
+            if (![string]::IsNullOrWhiteSpace($registeredExecutable)) {
+                $registeredExecutable
+            }
+        }
+    }
+
+    $uninstallRegistryPaths = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    Get-ItemProperty $uninstallRegistryPaths -ErrorAction SilentlyContinue |
+        Where-Object {
+            $displayNameProperty =
+                $_.PSObject.Properties['DisplayName']
+            $installLocationProperty =
+                $_.PSObject.Properties['InstallLocation']
+            $null -ne $displayNameProperty -and
+            $displayNameProperty.Value -like 'Inno Setup*' -and
+            $null -ne $installLocationProperty -and
+            ![string]::IsNullOrWhiteSpace(
+                $installLocationProperty.Value)
+        } |
+        ForEach-Object {
+            Join-Path (
+                $_.PSObject.Properties['InstallLocation'].Value) 'ISCC.exe'
+        }
+}
+
 function Get-InnoCompiler {
     $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
     $candidates = @(
         if ($command) { $command.Source }
+        Get-RegisteredInnoCompilerCandidates
         (Join-Path $env:ProgramFiles 'Inno Setup 7\ISCC.exe')
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 7\ISCC.exe')
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe')
+        (Join-Path $env:LOCALAPPDATA 'Inno Setup 7\ISCC.exe')
         (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+        (Join-Path $env:LOCALAPPDATA 'Inno Setup 6\ISCC.exe')
     ) | Where-Object { $_ } | Select-Object -Unique
 
     foreach ($candidate in $candidates) {

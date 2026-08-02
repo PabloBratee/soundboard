@@ -12,7 +12,6 @@
     <system:String x:Key="GlyphStop">&#xE71A;</system:String>
     <system:String x:Key="GlyphWarning">&#xE7BA;</system:String>
     <system:String x:Key="GlyphMicrophone">&#xE720;</system:String>
-    <system:String x:Key="GlyphMicrophoneMuted">&#xE74F;</system:String>
     <system:String x:Key="GlyphSearch">&#xE721;</system:String>
     <system:String x:Key="GlyphVolume">&#xE767;</system:String>
     <system:String x:Key="GlyphFavoriteOff">&#xE734;</system:String>

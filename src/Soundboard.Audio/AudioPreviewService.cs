@@ -11,7 +11,7 @@ public sealed class AudioPreviewService : IDisposable
     private PreviewSession? currentSession;
     private bool disposed;
     private long generation;
-    private float lastMaximumGainReductionDb;
+    private long lastClippedSampleCount;
     private long lastNonFiniteSampleCount;
 
     public AudioPreviewService(
@@ -34,26 +34,14 @@ public sealed class AudioPreviewService : IDisposable
         }
     }
 
-    public float CurrentGainReductionDb
+    public long ClippedSampleCount
     {
         get
         {
             lock (syncRoot)
             {
-                return currentSession?.Limiter.CurrentGainReductionDb ?? 0f;
-            }
-        }
-    }
-
-    public float MaximumGainReductionDb
-    {
-        get
-        {
-            lock (syncRoot)
-            {
-                return Math.Max(
-                    lastMaximumGainReductionDb,
-                    currentSession?.Limiter.MaximumGainReductionDb ?? 0f);
+                return lastClippedSampleCount
+                    + (currentSession?.Sanitizer.ClippedSampleCount ?? 0);
             }
         }
     }
@@ -65,7 +53,7 @@ public sealed class AudioPreviewService : IDisposable
             lock (syncRoot)
             {
                 return lastNonFiniteSampleCount
-                    + (currentSession?.Limiter.NonFiniteSampleCount ?? 0);
+                    + (currentSession?.Sanitizer.NonFiniteSampleCount ?? 0);
             }
         }
     }
@@ -80,9 +68,8 @@ public sealed class AudioPreviewService : IDisposable
             filePath,
             settings,
             endpoint,
-            normalizationGainDb: 0d,
-            limiterEnabled: true,
-            limiterCeilingDbfs: SamplePeakLimiter.DefaultCeilingDbfs,
+            volumePercent: 100d,
+            masterVolumePercent: 100d,
             cancellationToken);
     }
 
@@ -90,9 +77,8 @@ public sealed class AudioPreviewService : IDisposable
         string filePath,
         AudioClipSettings settings,
         AudioEndpoint endpoint,
-        double normalizationGainDb,
-        bool limiterEnabled,
-        double limiterCeilingDbfs,
+        double volumePercent,
+        double masterVolumePercent,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
@@ -115,9 +101,8 @@ public sealed class AudioPreviewService : IDisposable
                     settings,
                     endpoint,
                     decoderFactory,
-                    normalizationGainDb,
-                    limiterEnabled,
-                    limiterCeilingDbfs,
+                    volumePercent,
+                    masterVolumePercent,
                     OnPlaybackStopped),
                 cancellationToken);
 
@@ -170,7 +155,7 @@ public sealed class AudioPreviewService : IDisposable
 
         if (session is not null)
         {
-            CaptureLimiterDiagnostics(session);
+            CaptureBoundaryDiagnostics(session);
             session.StopAndDispose();
         }
     }
@@ -224,7 +209,7 @@ public sealed class AudioPreviewService : IDisposable
             currentSession = null;
         }
 
-        CaptureLimiterDiagnostics(session);
+        CaptureBoundaryDiagnostics(session);
         session.Dispose();
         if (exception is not null)
         {
@@ -235,15 +220,13 @@ public sealed class AudioPreviewService : IDisposable
         }
     }
 
-    private void CaptureLimiterDiagnostics(PreviewSession session)
+    private void CaptureBoundaryDiagnostics(PreviewSession session)
     {
         lock (syncRoot)
         {
-            lastMaximumGainReductionDb = Math.Max(
-                lastMaximumGainReductionDb,
-                session.Limiter.MaximumGainReductionDb);
+            lastClippedSampleCount += session.Sanitizer.ClippedSampleCount;
             lastNonFiniteSampleCount +=
-                session.Limiter.NonFiniteSampleCount;
+                session.Sanitizer.NonFiniteSampleCount;
         }
     }
 
@@ -260,21 +243,21 @@ public sealed class AudioPreviewService : IDisposable
             WasapiOut output,
             MMDevice device,
             DecodedAudioSource decoded,
-            SamplePeakLimiter limiter,
+            SampleBoundarySanitizer sanitizer,
             Action<PreviewSession, Exception?> stopped)
         {
             Id = id;
             this.output = output;
             this.device = device;
             this.decoded = decoded;
-            Limiter = limiter;
+            Sanitizer = sanitizer;
             this.stopped = stopped;
             output.PlaybackStopped += Output_PlaybackStopped;
         }
 
         public long Id { get; }
 
-        public SamplePeakLimiter Limiter { get; }
+        public SampleBoundarySanitizer Sanitizer { get; }
 
         public static PreviewSession Create(
             long id,
@@ -282,9 +265,8 @@ public sealed class AudioPreviewService : IDisposable
             AudioClipSettings settings,
             AudioEndpoint endpoint,
             IAudioFileDecoderFactory decoderFactory,
-            double normalizationGainDb,
-            bool limiterEnabled,
-            double limiterCeilingDbfs,
+            double volumePercent,
+            double masterVolumePercent,
             Action<PreviewSession, Exception?> stopped)
         {
             MMDeviceEnumerator? enumerator = null;
@@ -297,8 +279,7 @@ public sealed class AudioPreviewService : IDisposable
                 device = enumerator.GetDevice(endpoint.DeviceId);
                 if (device.DataFlow != DataFlow.Render
                     || device.State != DeviceState.Active
-                    || AudioDeviceService.IsLikelyVbCableDeviceName(
-                        device.FriendlyName))
+                    || AudioDeviceService.IsLikelyVbCableDevice(device))
                 {
                     throw new InvalidOperationException(
                         "The selected preview endpoint is unavailable or "
@@ -309,18 +290,9 @@ public sealed class AudioPreviewService : IDisposable
                 ISampleProvider processed = new AudioClipSampleProvider(
                     decoded.SampleProvider,
                     settings);
-                if (!double.IsFinite(normalizationGainDb)
-                    || normalizationGainDb
-                        < LoudnessNormalizationSettings.MaximumAttenuationDb
-                    || normalizationGainDb
-                        > LoudnessNormalizationSettings.MaximumBoostDb)
-                {
-                    throw new ArgumentOutOfRangeException(
-                        nameof(normalizationGainDb));
-                }
-
-                var linearGain =
-                    (float)Math.Pow(10d, normalizationGainDb / 20d);
+                var linearGain = AudioGain.Combine(
+                    volumePercent,
+                    masterVolumePercent);
                 if (Math.Abs(linearGain - 1f) > 0.000001f)
                 {
                     processed = new NAudio.Wave.SampleProviders
@@ -338,22 +310,19 @@ public sealed class AudioPreviewService : IDisposable
                     targetFormat,
                     out _,
                     out _);
-                var limiter = new SamplePeakLimiter(
-                    normalized,
-                    limiterEnabled,
-                    limiterCeilingDbfs);
+                var sanitizer = new SampleBoundarySanitizer(normalized);
                 output = new WasapiOut(
                     device,
                     AudioClientShareMode.Shared,
                     useEventSync: false,
                     latency: 100);
-                output.Init(limiter.ToWaveProvider());
+                output.Init(sanitizer.ToWaveProvider());
                 var session = new PreviewSession(
                     id,
                     output,
                     device,
                     decoded,
-                    limiter,
+                    sanitizer,
                     stopped);
                 output = null;
                 device = null;

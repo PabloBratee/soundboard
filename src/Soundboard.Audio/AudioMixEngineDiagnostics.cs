@@ -30,23 +30,9 @@ public sealed record AudioMixEngineDiagnostics(
 
     public float MonitorPeak { get; init; }
 
-    public bool SafetyLimiterEnabled { get; init; } = true;
+    public long ClippedSampleCount { get; init; }
 
-    public double SafetyLimiterCeilingDbfs { get; init; } =
-        SamplePeakLimiter.DefaultCeilingDbfs;
-
-    public TimeSpan SafetyLimiterLookahead { get; init; } =
-        SamplePeakLimiter.DefaultLookahead;
-
-    public float VirtualLimiterCurrentGainReductionDb { get; init; }
-
-    public float VirtualLimiterMaximumGainReductionDb { get; init; }
-
-    public float MonitorLimiterCurrentGainReductionDb { get; init; }
-
-    public float MonitorLimiterMaximumGainReductionDb { get; init; }
-
-    public long LimiterNonFiniteSampleCount { get; init; }
+    public long NonFiniteSampleCount { get; init; }
 
     public string MonitorInitializationStatus { get; init; } =
         "Disabled by setting";
@@ -56,4 +42,6 @@ public sealed record AudioMixEngineDiagnostics(
     public Guid? CurrentSoundId { get; init; }
 
     public long? CurrentPlaybackSessionId { get; init; }
+
+    public int ActiveSoundCount { get; init; }
 }

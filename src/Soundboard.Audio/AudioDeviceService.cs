@@ -1,10 +1,21 @@
 using System.Runtime.InteropServices;
 using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 
 namespace Soundboard.Audio;
 
-public sealed class AudioDeviceService
+public sealed class AudioDeviceService : IDisposable, IMMNotificationClient
 {
+    private readonly MMDeviceEnumerator notificationEnumerator = new();
+    private bool disposed;
+
+    public AudioDeviceService()
+    {
+        notificationEnumerator.RegisterEndpointNotificationCallback(this);
+    }
+
+    public event EventHandler<AudioDeviceChangedEventArgs>? DevicesChanged;
+
     public AudioDeviceSnapshot GetActiveDevices()
     {
         using var enumerator = new MMDeviceEnumerator();
@@ -39,11 +50,39 @@ public sealed class AudioDeviceService
             return false;
         }
 
-        return friendlyName.Contains("VB-CABLE", StringComparison.OrdinalIgnoreCase)
-            || friendlyName.Contains("VB-Audio Virtual Cable", StringComparison.OrdinalIgnoreCase)
-            || (friendlyName.StartsWith("CABLE", StringComparison.OrdinalIgnoreCase)
-                && (friendlyName.Contains(" Input", StringComparison.OrdinalIgnoreCase)
-                    || friendlyName.Contains(" Output", StringComparison.OrdinalIgnoreCase)));
+        return ContainsVbCableDriverIdentity(friendlyName);
+    }
+
+    public static bool IsLikelyVbCableDevice(
+        string? friendlyName,
+        string? interfaceFriendlyName,
+        string? endpointDescription,
+        string? interfacePath)
+    {
+        return ContainsVbCableDriverIdentity(interfaceFriendlyName)
+            || ContainsVbCableDriverIdentity(interfacePath)
+            || ContainsVbCableDriverIdentity(friendlyName)
+            || ContainsVbCableDriverIdentity(endpointDescription);
+    }
+
+    internal static bool IsLikelyVbCableDevice(MMDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        return IsLikelyVbCableDevice(
+            device.FriendlyName,
+            GetPropertyString(
+                device,
+                PropertyKeys.PKEY_DeviceInterface_FriendlyName),
+            GetPropertyString(device, PropertyKeys.PKEY_Device_DeviceDesc),
+            GetPropertyString(device, PropertyKeys.PKEY_Device_InterfaceKey));
+    }
+
+    internal static string? GetControllerDeviceId(MMDevice device)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        return GetPropertyString(
+            device,
+            PropertyKeys.PKEY_Device_ControllerDeviceId);
     }
 
     public AudioFormatInfo GetEndpointMixFormat(
@@ -76,7 +115,8 @@ public sealed class AudioDeviceService
         return GetDefaultDeviceId(
             enumerator,
             DataFlow.Capture,
-            "capture",
+            "communications capture",
+            Role.Communications,
             warnings);
     }
 
@@ -88,6 +128,7 @@ public sealed class AudioDeviceService
             enumerator,
             DataFlow.Render,
             "render",
+            Role.Console,
             warnings);
     }
 
@@ -95,18 +136,19 @@ public sealed class AudioDeviceService
         MMDeviceEnumerator enumerator,
         DataFlow dataFlow,
         string directionLabel,
+        Role role,
         ICollection<string> warnings)
     {
         try
         {
-            if (!enumerator.HasDefaultAudioEndpoint(dataFlow, Role.Console))
+            if (!enumerator.HasDefaultAudioEndpoint(dataFlow, role))
             {
                 return null;
             }
 
             using var defaultDevice = enumerator.GetDefaultAudioEndpoint(
                 dataFlow,
-                Role.Console);
+                role);
             return defaultDevice.ID;
         }
         catch (Exception exception) when (IsRecoverableDeviceException(exception))
@@ -116,6 +158,63 @@ public sealed class AudioDeviceService
                 + exception.Message);
             return null;
         }
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        disposed = true;
+        notificationEnumerator.UnregisterEndpointNotificationCallback(this);
+        notificationEnumerator.Dispose();
+    }
+
+    void IMMNotificationClient.OnDeviceStateChanged(
+        string deviceId,
+        DeviceState newState) =>
+        RaiseDeviceChanged(
+            new AudioDeviceChangedEventArgs(
+                AudioDeviceChangeKind.StateChanged,
+                deviceId,
+                null,
+                null,
+                newState));
+
+    void IMMNotificationClient.OnDeviceAdded(string deviceId) =>
+        RaiseDeviceChanged(new AudioDeviceChangedEventArgs(
+            AudioDeviceChangeKind.Added,
+            deviceId));
+
+    void IMMNotificationClient.OnDeviceRemoved(string deviceId) =>
+        RaiseDeviceChanged(new AudioDeviceChangedEventArgs(
+            AudioDeviceChangeKind.Removed,
+            deviceId));
+
+    void IMMNotificationClient.OnDefaultDeviceChanged(
+        DataFlow flow,
+        Role role,
+        string defaultDeviceId) =>
+        RaiseDeviceChanged(new AudioDeviceChangedEventArgs(
+            AudioDeviceChangeKind.DefaultChanged,
+            defaultDeviceId,
+            flow,
+            role));
+
+    void IMMNotificationClient.OnPropertyValueChanged(
+        string deviceId,
+        PropertyKey propertyKey) =>
+        RaiseDeviceChanged(new AudioDeviceChangedEventArgs(
+            AudioDeviceChangeKind.PropertyChanged,
+            deviceId));
+
+    private void RaiseDeviceChanged(AudioDeviceChangedEventArgs eventArgs)
+    {
+        // Core Audio requires notification callbacks to remain nonblocking.
+        ThreadPool.QueueUserWorkItem(
+            _ => DevicesChanged?.Invoke(this, eventArgs));
     }
 
     private static AudioEndpoint[] EnumerateActiveEndpoints(
@@ -138,6 +237,16 @@ public sealed class AudioDeviceService
 
                 var deviceId = device.ID;
                 var friendlyName = device.FriendlyName;
+                var interfaceFriendlyName = GetPropertyString(
+                    device,
+                    PropertyKeys.PKEY_DeviceInterface_FriendlyName);
+                var endpointDescription = GetPropertyString(
+                    device,
+                    PropertyKeys.PKEY_Device_DeviceDesc);
+                var controllerDeviceId = GetControllerDeviceId(device);
+                var interfacePath = GetPropertyString(
+                    device,
+                    PropertyKeys.PKEY_Device_InterfaceKey);
 
                 endpoints.Add(new AudioEndpoint(
                     deviceId,
@@ -145,7 +254,15 @@ public sealed class AudioDeviceService
                     direction,
                     MapState(device.State),
                     string.Equals(deviceId, defaultDeviceId, StringComparison.Ordinal),
-                    IsLikelyVbCableDeviceName(friendlyName)));
+                    IsLikelyVbCableDevice(
+                        friendlyName,
+                        interfaceFriendlyName,
+                        endpointDescription,
+                        interfacePath),
+                    interfaceFriendlyName,
+                    endpointDescription,
+                    controllerDeviceId,
+                    interfacePath));
             }
             catch (Exception exception) when (IsRecoverableDeviceException(exception))
             {
@@ -200,5 +317,38 @@ public sealed class AudioDeviceService
             or InvalidOperationException
             or ArgumentException
             or KeyNotFoundException;
+    }
+
+    private static bool ContainsVbCableDriverIdentity(string? value)
+    {
+        return !string.IsNullOrWhiteSpace(value)
+            && (value.Contains(
+                    "VB-Audio Virtual Cable",
+                    StringComparison.OrdinalIgnoreCase)
+                || value.Contains(
+                    "VBAudioVAC",
+                    StringComparison.OrdinalIgnoreCase)
+                || value.Contains(
+                    "VB-CABLE",
+                    StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? GetPropertyString(
+        MMDevice device,
+        PropertyKey propertyKey)
+    {
+        try
+        {
+            if (!device.Properties.Contains(propertyKey))
+            {
+                return null;
+            }
+
+            return device.Properties[propertyKey].Value?.ToString();
+        }
+        catch (Exception exception) when (IsRecoverableDeviceException(exception))
+        {
+            return null;
+        }
     }
 }

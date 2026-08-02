@@ -34,14 +34,15 @@ Soundboard\Soundboard.exe. "Portable" means no installer is required and the
 application is self-contained. It does not mean user data is stored beside
 the executable.
 
-On first launch, open Settings and select:
+On first launch, Soundboard opens a short setup page:
 
-1. Your physical microphone.
-2. CABLE Input as the Soundboard virtual output.
+1. Use the recommended Windows default communications microphone, or pin a
+   physical microphone.
+2. Confirm CABLE Input as the Soundboard virtual output.
 3. An optional physical headset or speakers for sound-only monitoring.
 
-Soundboard never starts the audio engine automatically. Select Start engine
-after reviewing the selected devices.
+Soundboard starts microphone passthrough automatically and reconnects after
+endpoint changes. In Discord or a game, select CABLE Output once as the input.
 
 DISCORD ROUTING
 ---------------
@@ -66,7 +67,7 @@ Soundboard stores user data in:
 %LOCALAPPDATA%\Soundboard
 
 That directory contains imported managed audio, library.json, settings.json,
-the waveform cache, and the loudness-analysis cache. Backing up the entire
+and the waveform cache. Backing up the entire
 Soundboard directory preserves the library and settings. Changing the
 application installation folder does not move any of this user data.
 

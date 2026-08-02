@@ -61,7 +61,7 @@
                            Text="Settings" />
                 <TextBlock Margin="0,4,0,12"
                            Style="{StaticResource SecondaryTextStyle}"
-                           Text="Device, monitoring, hotkey, and loudness options. Changing a setting here never starts or stops the audio engine." />
+                           Text="Choose your microphone once. Soundboard starts audio automatically and keeps it available while the app is open." />
             </StackPanel>
         </Border>
 
@@ -74,10 +74,28 @@
                 <ScrollViewer Padding="20,18"
                               VerticalScrollBarVisibility="Auto">
                     <StackPanel>
+                        <Border x:Name="SetupBanner"
+                                Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SubtitleTextStyle}"
+                                           Text="Finish first-time audio setup" />
+                                <TextBlock Margin="0,6,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Use the recommended Windows default microphone or pin one device. Then select CABLE Input below and choose CABLE Output once in Discord or your game." />
+                                <Button x:Name="CompleteSetupButton"
+                                        Margin="0,14,0,0"
+                                        HorizontalAlignment="Left"
+                                        Content="Complete setup"
+                                        Style="{StaticResource PrimaryButtonStyle}" />
+                            </StackPanel>
+                        </Border>
                         <Border Style="{StaticResource SettingsGroupStyle}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
-                                           Text="MICROPHONE" />
+                                           Text="YOUR MICROPHONE" />
+                                <CheckBox x:Name="UseDefaultMicrophoneCheckBox"
+                                          Margin="0,0,0,14"
+                                          Content="Use Windows default communications microphone (recommended)" />
                                 <TextBlock Style="{StaticResource FieldLabelStyle}"
                                            Text="Input device" />
                                 <ComboBox x:Name="MicrophoneComboBox"
@@ -85,28 +103,10 @@
                                           IsTextSearchEnabled="True"
                                           TextSearch.TextPath="FriendlyName"
                                           AutomationProperties.Name="Microphone input device" />
-
-                                <Grid Margin="0,14,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="90" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="52" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock VerticalAlignment="Center"
-                                               Style="{StaticResource SecondaryTextStyle}"
-                                               Text="Volume" />
-                                    <Slider x:Name="MicrophoneVolumeSlider"
-                                            Grid.Column="1"
-                                            Minimum="0"
-                                            Maximum="200"
-                                            Value="100"
-                                            TickFrequency="10"
-                                            AutomationProperties.Name="Microphone volume percent" />
-                                    <TextBlock x:Name="MicrophoneVolumeTextBlock"
-                                               Grid.Column="2"
-                                               Style="{StaticResource ValueTextStyle}"
-                                               Text="100%" />
-                                </Grid>
+                                <TextBlock x:Name="MicrophoneSelectionStatusTextBlock"
+                                           Margin="0,7,0,0"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Checking microphone selection…" />
 
                                 <Grid Margin="0,12,0,0">
                                     <Grid.ColumnDefinitions>
@@ -114,10 +114,9 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="52" />
                                     </Grid.ColumnDefinitions>
-                                    <CheckBox x:Name="MuteMicrophoneCheckBox"
-                                              Margin="0,0,16,0"
-                                              VerticalAlignment="Center"
-                                              Content="Mute microphone" />
+                                    <Button x:Name="TestMicrophoneButton"
+                                            Margin="0,0,16,0"
+                                            Content="Test microphone" />
                                     <ProgressBar x:Name="MicrophonePeakProgressBar"
                                                  Grid.Column="1"
                                                  Maximum="1"
@@ -127,15 +126,19 @@
                                                Style="{StaticResource ValueTextStyle}"
                                                Text="0%" />
                                 </Grid>
+                                <TextBlock x:Name="MicrophoneTestStatusTextBlock"
+                                           Margin="0,8,0,0"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Speak to see the live input level." />
                             </StackPanel>
                         </Border>
 
                         <Border Style="{StaticResource SettingsGroupStyle}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
-                                           Text="VIRTUAL OUTPUT TO DISCORD" />
+                                           Text="SOUNDBOARD MICROPHONE" />
                                 <TextBlock Style="{StaticResource FieldLabelStyle}"
-                                           Text="Virtual output device" />
+                                           Text="VB-CABLE connection" />
                                 <ComboBox x:Name="VirtualOutputComboBox"
                                           ItemTemplate="{StaticResource AudioEndpointTemplate}"
                                           IsTextSearchEnabled="True"
@@ -146,6 +149,9 @@
                                            Margin="0,12,0,0"
                                            Style="{StaticResource SecondaryTextStyle}"
                                            Text="Microphone + Soundboard → CABLE Input" />
+                                <TextBlock Margin="0,6,0,0"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Select the matching CABLE Output once as the microphone in Discord or your game." />
                                 <TextBlock x:Name="VirtualCableStatusTextBlock"
                                            Margin="0,6,0,0"
                                            Foreground="{StaticResource WarningBrush}"
@@ -162,8 +168,8 @@
                                 <StackPanel Margin="0,16,0,0"
                                             Orientation="Horizontal">
                                     <Button x:Name="RefreshDevicesButton"
-                                            Content="Refresh devices"
-                                            AutomationProperties.Name="Refresh audio devices" />
+                                            Content="Restart audio service"
+                                            AutomationProperties.Name="Restart audio service and refresh devices" />
                                     <TextBlock x:Name="DeviceCountsTextBlock"
                                                Margin="14,0,0,0"
                                                VerticalAlignment="Center"
@@ -174,7 +180,7 @@
                         </Border>
 
                         <TextBlock Style="{StaticResource MutedTextStyle}"
-                                   Text="Device selectors are locked while the audio engine is running. Stop the engine from the main window to change devices. Soundboard never changes your Windows default devices." />
+                                   Text="Device changes restart only Soundboard's local audio service. Windows defaults and per-application settings are never changed." />
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -212,7 +218,7 @@
                                     <Slider x:Name="MonitorVolumeSlider"
                                             Grid.Column="1"
                                             Minimum="0"
-                                            Maximum="200"
+                                            Maximum="100"
                                             Value="100"
                                             TickFrequency="10"
                                             AutomationProperties.Name="Monitor volume percent" />
@@ -353,91 +359,6 @@
                                 <TextBlock Margin="0,6,0,0"
                                            Style="{StaticResource SecondaryTextStyle}"
                                            Text="Only explicitly registered combinations are received. Soundboard does not monitor or record other keyboard input. Per-sound hotkeys are assigned from each tile's action menu on the soundboard." />
-                            </StackPanel>
-                        </Border>
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-
-            <!-- ==================== Loudness and safety ==================== -->
-            <TabItem Header="Loudness &amp; safety">
-                <ScrollViewer Padding="20,18"
-                              VerticalScrollBarVisibility="Auto">
-                    <StackPanel>
-                        <Border Style="{StaticResource SettingsGroupStyle}">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
-                                           Text="NORMALIZATION" />
-                                <TextBlock Style="{StaticResource SecondaryTextStyle}"
-                                           Text="Normalization adjusts individual sound effects toward a consistent perceived loudness. It affects sound audio only; microphone volume is unchanged and audio files are never rewritten." />
-                                <TextBlock Margin="0,14,0,0"
-                                           Style="{StaticResource FieldLabelStyle}"
-                                           Text="Global normalization target" />
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="78" />
-                                    </Grid.ColumnDefinitions>
-                                    <Slider x:Name="NormalizationTargetSlider"
-                                            Minimum="-24"
-                                            Maximum="-10"
-                                            Value="-16"
-                                            TickFrequency="0.5"
-                                            IsSnapToTickEnabled="True"
-                                            AutomationProperties.Name="Global normalization target in LUFS" />
-                                    <TextBlock x:Name="NormalizationTargetTextBlock"
-                                               Grid.Column="1"
-                                               Style="{StaticResource ValueTextStyle}"
-                                               Text="-16.0 LUFS" />
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-
-                        <Border Style="{StaticResource SettingsGroupStyle}">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
-                                           Text="SAMPLE-PEAK LIMITER" />
-                                <TextBlock Style="{StaticResource SecondaryTextStyle}"
-                                           Text="The safety limiter prevents excessive peaks in the final output mix." />
-                                <CheckBox x:Name="SafetyLimiterCheckBox"
-                                          Margin="0,14,0,0"
-                                          Content="Enable safety limiter" />
-
-                                <Grid Margin="0,14,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="90" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="78" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock VerticalAlignment="Center"
-                                               Style="{StaticResource SecondaryTextStyle}"
-                                               Text="Ceiling" />
-                                    <Slider x:Name="LimiterCeilingSlider"
-                                            Grid.Column="1"
-                                            Minimum="-6"
-                                            Maximum="-0.1"
-                                            Value="-1"
-                                            TickFrequency="0.1"
-                                            IsSnapToTickEnabled="True"
-                                            AutomationProperties.Name="Limiter ceiling in dBFS" />
-                                    <TextBlock x:Name="LimiterCeilingTextBlock"
-                                               Grid.Column="2"
-                                               Style="{StaticResource ValueTextStyle}"
-                                               Text="-1.0 dBFS" />
-                                </Grid>
-
-                                <TextBlock x:Name="LimiterStatusTextBlock"
-                                           Margin="0,14,0,0"
-                                           Style="{StaticResource SecondaryTextStyle}"
-                                           Text="Enabled · 5 ms lookahead" />
-                                <TextBlock x:Name="LimiterGainReductionTextBlock"
-                                           Margin="0,6,0,0"
-                                           Style="{StaticResource CaptionTextStyle}"
-                                           Text="Current gain reduction — Virtual: 0.0 dB · Monitor: 0.0 dB" />
-                                <TextBlock x:Name="LimiterMaximumReductionTextBlock"
-                                           Margin="0,4,0,0"
-                                           Style="{StaticResource CaptionTextStyle}"
-                                           Text="Maximum gain reduction — Virtual: 0.0 dB · Monitor: 0.0 dB" />
                             </StackPanel>
                         </Border>
                     </StackPanel>

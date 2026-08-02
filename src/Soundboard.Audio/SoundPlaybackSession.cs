@@ -13,6 +13,9 @@ internal sealed class SoundPlaybackSession : IDisposable
 {
     private readonly object syncRoot = new();
     private SoundPlaybackBranch? monitorBranch;
+    private readonly float perSoundGain;
+    private float masterGain;
+    private float monitorGain;
     private bool disposed;
     private int authoritativeCompletionQueued;
     private int monitorCompletionQueued;
@@ -24,19 +27,22 @@ internal sealed class SoundPlaybackSession : IDisposable
         AudioClipSettings clipSettings,
         IAudioFileDecoderFactory decoderFactory,
         WaveFormat virtualTargetFormat,
-        float virtualVolume,
-        float normalizationGain)
+        double volumePercent,
+        float masterGain,
+        float monitorGain)
     {
         SoundId = soundId;
         SessionId = sessionId;
+        perSoundGain = AudioGain.FromPercent(volumePercent);
+        this.masterGain = masterGain;
+        this.monitorGain = monitorGain;
         VirtualBranch = new SoundPlaybackBranch(
             SoundPlaybackBranchRole.VirtualOutput,
             filePath,
             clipSettings,
             decoderFactory,
             virtualTargetFormat,
-            virtualVolume,
-            normalizationGain);
+            perSoundGain * masterGain);
     }
 
     public Guid SoundId { get; }
@@ -102,14 +108,19 @@ internal sealed class SoundPlaybackSession : IDisposable
         return Interlocked.Exchange(ref monitorCompletionQueued, 1) == 0;
     }
 
-    public void SetVirtualVolume(float volume)
+    public float MonitorBranchGain => perSoundGain * masterGain * monitorGain;
+
+    public void SetMasterVolume(float volume)
     {
-        VirtualBranch.Volume = volume;
+        masterGain = volume;
+        VirtualBranch.Volume = perSoundGain * masterGain;
+        MonitorBranch?.SetVolume(MonitorBranchGain);
     }
 
     public void SetMonitorVolume(float volume)
     {
-        MonitorBranch?.SetVolume(volume);
+        monitorGain = volume;
+        MonitorBranch?.SetVolume(MonitorBranchGain);
     }
 
     public void Dispose()
@@ -137,7 +148,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
 {
     private readonly object syncRoot = new();
     private readonly DecodedAudioSource decodedSource;
-    private readonly VolumeSampleProvider volumeProvider;
+    private readonly SmoothGainSampleProvider gainProvider;
     private Exception? playbackError;
     private bool disposed;
 
@@ -147,8 +158,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         AudioClipSettings clipSettings,
         IAudioFileDecoderFactory decoderFactory,
         WaveFormat targetFormat,
-        float volume,
-        float normalizationGain)
+        float volume)
     {
         ArgumentNullException.ThrowIfNull(clipSettings);
         Role = role;
@@ -166,22 +176,6 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
             ISampleProvider processed = new AudioClipSampleProvider(
                 decodedSource.SampleProvider,
                 clipSettings);
-            if (!float.IsFinite(normalizationGain)
-                || normalizationGain <= 0f)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(normalizationGain),
-                    "Normalization gain must be finite and positive.");
-            }
-
-            if (Math.Abs(normalizationGain - 1f) > 0.000001f)
-            {
-                processed = new VolumeSampleProvider(processed)
-                {
-                    Volume = normalizationGain
-                };
-            }
-
             var normalized = AudioFormatNormalizer.Normalize(
                 processed,
                 targetFormat,
@@ -190,10 +184,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
 
             ResamplingActive = resamplingActive;
             ChannelConversionActive = channelConversionActive;
-            volumeProvider = new VolumeSampleProvider(normalized)
-            {
-                Volume = volume
-            };
+            gainProvider = new SmoothGainSampleProvider(normalized, volume);
         }
         catch
         {
@@ -202,7 +193,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         }
     }
 
-    public WaveFormat WaveFormat => volumeProvider.WaveFormat;
+    public WaveFormat WaveFormat => gainProvider.WaveFormat;
 
     public SoundPlaybackBranchRole Role { get; }
 
@@ -227,7 +218,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         {
             lock (syncRoot)
             {
-                return volumeProvider.Volume;
+                return gainProvider.Gain;
             }
         }
 
@@ -236,7 +227,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
             lock (syncRoot)
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
-                volumeProvider.Volume = value;
+                gainProvider.SetGain(value);
             }
         }
     }
@@ -247,7 +238,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         {
             if (!disposed)
             {
-                volumeProvider.Volume = volume;
+                gainProvider.SetGain(volume);
             }
         }
     }
@@ -263,7 +254,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
 
             try
             {
-                return volumeProvider.Read(buffer, offset, count);
+                return gainProvider.Read(buffer, offset, count);
             }
             catch (Exception exception)
             {
@@ -284,6 +275,94 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
 
             disposed = true;
             decodedSource.Dispose();
+        }
+    }
+}
+
+internal sealed class SmoothGainSampleProvider : ISampleProvider
+{
+    private const int RampMilliseconds = 5;
+
+    private readonly ISampleProvider source;
+    private readonly int rampFrameCount;
+    private float currentGain;
+    private float targetGain;
+    private int remainingRampFrames;
+
+    public SmoothGainSampleProvider(ISampleProvider source, float initialGain)
+    {
+        this.source = source ?? throw new ArgumentNullException(nameof(source));
+        ValidateGain(initialGain);
+        currentGain = initialGain;
+        targetGain = initialGain;
+        rampFrameCount = Math.Max(
+            1,
+            source.WaveFormat.SampleRate * RampMilliseconds / 1000);
+    }
+
+    public WaveFormat WaveFormat => source.WaveFormat;
+
+    public float Gain => targetGain;
+
+    public void SetGain(float gain)
+    {
+        ValidateGain(gain);
+        if (gain == targetGain)
+        {
+            return;
+        }
+
+        targetGain = gain;
+        remainingRampFrames = rampFrameCount;
+    }
+
+    public int Read(float[] buffer, int offset, int count)
+    {
+        var read = source.Read(buffer, offset, count);
+        var channels = WaveFormat.Channels;
+        var completeFrameSamples = read - (read % channels);
+
+        for (var sampleOffset = 0;
+             sampleOffset < completeFrameSamples;
+             sampleOffset += channels)
+        {
+            AdvanceRamp();
+            for (var channel = 0; channel < channels; channel++)
+            {
+                buffer[offset + sampleOffset + channel] *= currentGain;
+            }
+        }
+
+        for (var sampleOffset = completeFrameSamples;
+             sampleOffset < read;
+             sampleOffset++)
+        {
+            buffer[offset + sampleOffset] *= currentGain;
+        }
+
+        return read;
+    }
+
+    private void AdvanceRamp()
+    {
+        if (remainingRampFrames <= 0)
+        {
+            currentGain = targetGain;
+            return;
+        }
+
+        currentGain +=
+            (targetGain - currentGain) / remainingRampFrames;
+        remainingRampFrames--;
+    }
+
+    private static void ValidateGain(float gain)
+    {
+        if (!float.IsFinite(gain) || gain is < 0f or > 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(gain),
+                "Gain must be finite and between silence and unity.");
         }
     }
 }

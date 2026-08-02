@@ -176,13 +176,13 @@
                             <TextBlock Margin="0,0,5,0"
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CaptionTextStyle}"
-                                       Text="Engine" />
+                                       Text="Audio" />
                             <TextBlock x:Name="EngineStateTextBlock"
                                        VerticalAlignment="Center"
                                        FontSize="{StaticResource FontSizeCaption}"
                                        FontWeight="SemiBold"
                                        Foreground="{StaticResource TextPrimaryBrush}"
-                                       Text="Stopped" />
+                                       Text="Connecting" />
                         </StackPanel>
                     </Border>
 
@@ -214,28 +214,12 @@
                         </StackPanel>
                     </Button>
 
-                    <Border Width="1"
-                            Margin="12,4"
-                            Background="{StaticResource BorderBrush}" />
-
-                    <Button x:Name="StartEngineButton"
-                            Click="StartEngineButton_Click"
-                            Content="Start engine"
-                            ToolTip="Open the microphone and virtual output. Soundboard never starts audio routing on its own."
-                            AutomationProperties.Name="Start audio engine" />
-                    <Button x:Name="StopEngineButton"
-                            Margin="8,0,0,0"
-                            Click="StopEngineButton_Click"
-                            Content="Stop engine"
-                            ToolTip="Release the microphone and all audio devices."
-                            AutomationProperties.Name="Stop audio engine" />
-
                     <Button x:Name="SettingsButton"
                             Margin="12,0,0,0"
                             Click="SettingsButton_Click"
                             Content="&#xE713;"
                             Style="{StaticResource IconButtonStyle}"
-                            ToolTip="Settings — devices, monitoring, hotkeys, loudness, diagnostics"
+                            ToolTip="Settings — devices, monitoring, hotkeys, diagnostics"
                             AutomationProperties.Name="Open settings" />
                 </StackPanel>
             </Grid>
@@ -667,18 +651,6 @@
                                                                                Style="{StaticResource TileBadgeTextStyle}"
                                                                                Text="{Binding EditedStateText}" />
                                                                 </Border>
-                                                                <Border Margin="0,3,5,0"
-                                                                        Padding="7,2"
-                                                                        BorderBrush="{StaticResource BorderStrongBrush}"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="4"
-                                                                        Visibility="{Binding Sound.NormalizeLoudness, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                                                    <TextBlock MaxWidth="120"
-                                                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                                                               Style="{StaticResource TileBadgeTextStyle}"
-                                                                               Text="{Binding NormalizationStateText}"
-                                                                               ToolTip="{Binding NormalizationStateText}" />
-                                                                </Border>
                                                             </WrapPanel>
                                                         </Grid>
                                                     </Button>
@@ -871,17 +843,6 @@
                                    TextWrapping="NoWrap"
                                    ToolTip="Headphone monitoring state" />
                     </Border>
-                    <Border x:Name="LimiterActivityChip"
-                            Style="{StaticResource StatusChipStyle}"
-                            Visibility="Collapsed">
-                        <TextBlock x:Name="LimiterActivityTextBlock"
-                                   Foreground="{StaticResource WarningBrush}"
-                                   Style="{StaticResource MutedTextStyle}"
-                                   Text="Limiting 0.0 dB"
-                                   TextWrapping="NoWrap"
-                                   ToolTip="The safety limiter is reducing output gain" />
-                    </Border>
-
                     <TextBlock Margin="4,0,7,0"
                                VerticalAlignment="Center"
                                FontFamily="{StaticResource IconFontFamily}"

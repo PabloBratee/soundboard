@@ -12,14 +12,9 @@ public partial class EditClipDialog : Window
     private readonly string managedPath;
     private readonly WaveformCacheService waveformCacheService;
     private readonly AudioPreviewService previewService;
-    private readonly LoudnessAnalysisService loudnessAnalysisService;
     private readonly AudioEndpoint? previewEndpoint;
-    private readonly double normalizationTargetLufs;
-    private readonly bool limiterEnabled;
-    private readonly double limiterCeilingDbfs;
+    private readonly double masterVolumePercent;
     private readonly CancellationTokenSource lifetimeCancellation = new();
-    private LoudnessAnalysisOutcome? analysisOutcome;
-    private bool analysisInProgress;
     private bool closed;
 
     public EditClipDialog(
@@ -27,30 +22,21 @@ public partial class EditClipDialog : Window
         string managedPath,
         WaveformCacheService waveformCacheService,
         AudioPreviewService previewService,
-        LoudnessAnalysisService loudnessAnalysisService,
         AudioEndpoint? previewEndpoint,
         string previewAvailabilityMessage,
-        double normalizationTargetLufs,
-        bool limiterEnabled,
-        double limiterCeilingDbfs)
+        double masterVolumePercent)
     {
         ArgumentNullException.ThrowIfNull(sound);
         ArgumentException.ThrowIfNullOrWhiteSpace(managedPath);
-        ArgumentNullException.ThrowIfNull(waveformCacheService);
-        ArgumentNullException.ThrowIfNull(previewService);
-        ArgumentNullException.ThrowIfNull(loudnessAnalysisService);
-        InitializeComponent();
-        WindowTheme.UseDarkTitleBar(this);
-
         this.sound = sound;
         this.managedPath = managedPath;
         this.waveformCacheService = waveformCacheService;
         this.previewService = previewService;
-        this.loudnessAnalysisService = loudnessAnalysisService;
         this.previewEndpoint = previewEndpoint;
-        this.normalizationTargetLufs = normalizationTargetLufs;
-        this.limiterEnabled = limiterEnabled;
-        this.limiterCeilingDbfs = limiterCeilingDbfs;
+        this.masterVolumePercent = masterVolumePercent;
+
+        InitializeComponent();
+        WindowTheme.UseDarkTitleBar(this);
         SoundNameTextBlock.Text = sound.DisplayName;
         OriginalFileNameTextBlock.Text = sound.OriginalFileName;
         FormatTextBlock.Text = sound.FormatLabel;
@@ -66,13 +52,6 @@ public partial class EditClipDialog : Window
             sound.FadeInMilliseconds,
             sound.FadeOutMilliseconds);
         WaveformEditor.ValuesChanged += WaveformEditor_ValuesChanged;
-        NormalizeLoudnessCheckBox.IsChecked = sound.NormalizeLoudness;
-        NormalizeLoudnessCheckBox.Checked +=
-            NormalizeLoudnessCheckBox_Changed;
-        NormalizeLoudnessCheckBox.Unchecked +=
-            NormalizeLoudnessCheckBox_Changed;
-        LoudnessTargetTextBlock.Text =
-            $"{normalizationTargetLufs:N1} LUFS";
         previewService.PreviewFailed += PreviewService_PreviewFailed;
         Loaded += EditClipDialog_Loaded;
         Closed += EditClipDialog_Closed;
@@ -81,15 +60,10 @@ public partial class EditClipDialog : Window
 
     public SoundClipMetadataUpdate? ProposedUpdate { get; private set; }
 
-    public LoudnessAnalysisOutcome? SavedAnalysisOutcome { get; private set; }
-
-    private async void EditClipDialog_Loaded(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private async void EditClipDialog_Loaded(object sender, RoutedEventArgs eventArgs)
     {
         try
         {
-            await LoadCachedAnalysisAsync();
             var result = await waveformCacheService.GetOrCreateAsync(
                 managedPath,
                 sound.ContentHash,
@@ -118,16 +92,14 @@ public partial class EditClipDialog : Window
             if (!closed)
             {
                 WaveformStatusTextBlock.Text =
-                    "Waveform decoding failed. Playback and clip editing "
-                    + $"remain available; reopen to retry. {exception.Message}";
+                    "Waveform decoding failed. Clip editing remains available: "
+                    + exception.Message;
                 WaveformStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             }
         }
     }
 
-    private async void PlayPreviewButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private async void PlayPreviewButton_Click(object sender, RoutedEventArgs eventArgs)
     {
         try
         {
@@ -137,82 +109,50 @@ public partial class EditClipDialog : Window
                     "No safe physical preview device is available.");
             }
 
-            var settings = CreateProposedSettings();
-            var normalizationGainDb = 0d;
-            if (NormalizeLoudnessCheckBox.IsChecked == true)
-            {
-                var outcome = await EnsureMatchingAnalysisAsync();
-                if (!outcome.Result.IsValid)
-                {
-                    throw new InvalidOperationException(
-                        outcome.Result.InvalidReason
-                        ?? "Loudness analysis is not valid.");
-                }
-
-                var calculation = LoudnessNormalization.Calculate(
-                    outcome.Result,
-                    normalizationTargetLufs);
-                normalizationGainDb = calculation.AppliedGainDb;
-            }
-
             PreviewStatusTextBlock.Text =
-                $"Starting local-only preview on "
-                + $"{previewEndpoint.FriendlyName}…";
-            PreviewStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
+                $"Starting local-only preview on {previewEndpoint.FriendlyName}…";
             await previewService.PlayAsync(
                 managedPath,
-                settings,
+                CreateProposedSettings(),
                 previewEndpoint,
-                normalizationGainDb,
-                limiterEnabled,
-                limiterCeilingDbfs,
+                sound.VolumePercent,
+                masterVolumePercent,
                 lifetimeCancellation.Token);
             PreviewStatusTextBlock.Text =
-                $"Playing once through {previewEndpoint.FriendlyName}. "
-                + "Preview is not connected to the virtual microphone mixer.";
+                $"Playing once through {previewEndpoint.FriendlyName}.";
             PreviewStatusTextBlock.Foreground = ThemeBrush("SuccessBrush");
         }
         catch (OperationCanceledException)
         {
-            // The dialog is closing.
+            // The dialog is closing or this preview was superseded.
         }
         catch (Exception exception)
         {
-            PreviewStatusTextBlock.Text =
-                $"Preview could not start: {exception.Message}";
+            PreviewStatusTextBlock.Text = $"Preview could not start: {exception.Message}";
             PreviewStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
         }
     }
 
-    private void StopPreviewButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private void StopPreviewButton_Click(object sender, RoutedEventArgs eventArgs)
     {
         previewService.Stop();
-        PreviewStatusTextBlock.Text =
-            "Preview stopped. The main microphone engine was not changed.";
+        PreviewStatusTextBlock.Text = "Preview stopped.";
         PreviewStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
     }
 
-    private void ResetButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private void ResetButton_Click(object sender, RoutedEventArgs eventArgs)
     {
         previewService.Stop();
         WaveformEditor.Reset();
         PreviewStatusTextBlock.Text =
-            "Reset proposed full-duration playback with no fades. "
-            + "Select Save to persist it.";
-        PreviewStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
+            "Reset to full-duration playback with no fades. Select Save to persist it.";
     }
 
-    private void SaveButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private void SaveButton_Click(object sender, RoutedEventArgs eventArgs)
     {
         try
         {
-            var settings = CreateProposedSettings();
+            _ = CreateProposedSettings();
             ProposedUpdate = new SoundClipMetadataUpdate(
                 WaveformEditor.TrimStartMilliseconds,
                 WaveformEditor.TrimEndMilliseconds
@@ -220,24 +160,7 @@ public partial class EditClipDialog : Window
                         ? null
                         : WaveformEditor.TrimEndMilliseconds,
                 WaveformEditor.FadeInMilliseconds,
-                WaveformEditor.FadeOutMilliseconds,
-                NormalizeLoudnessCheckBox.IsChecked == true);
-            if (NormalizeLoudnessCheckBox.IsChecked == true)
-            {
-                var key = LoudnessAnalysisKey.Create(
-                    sound.ContentHash,
-                    settings);
-                if (analysisOutcome?.Key != key
-                    || analysisOutcome.Result.IsValid != true)
-                {
-                    throw new InvalidOperationException(
-                        "Analyze the current trim and fade settings before "
-                        + "saving with loudness normalization enabled.");
-                }
-
-                SavedAnalysisOutcome = analysisOutcome;
-            }
-            _ = settings;
+                WaveformEditor.FadeOutMilliseconds);
             previewService.Stop();
             DialogResult = true;
         }
@@ -252,9 +175,7 @@ public partial class EditClipDialog : Window
         }
     }
 
-    private void CancelButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private void CancelButton_Click(object sender, RoutedEventArgs eventArgs)
     {
         previewService.Stop();
         DialogResult = false;
@@ -267,269 +188,43 @@ public partial class EditClipDialog : Window
         previewService.Stop();
         previewService.PreviewFailed -= PreviewService_PreviewFailed;
         WaveformEditor.ValuesChanged -= WaveformEditor_ValuesChanged;
-        NormalizeLoudnessCheckBox.Checked -=
-            NormalizeLoudnessCheckBox_Changed;
-        NormalizeLoudnessCheckBox.Unchecked -=
-            NormalizeLoudnessCheckBox_Changed;
         lifetimeCancellation.Dispose();
     }
 
-    private void PreviewService_PreviewFailed(
-        object? sender,
-        string message)
+    private void PreviewService_PreviewFailed(object? sender, string message)
     {
-        if (closed || Dispatcher.HasShutdownStarted)
+        if (!closed && !Dispatcher.HasShutdownStarted)
         {
-            return;
-        }
-
-        _ = Dispatcher.BeginInvoke(
-            () =>
+            _ = Dispatcher.BeginInvoke(() =>
             {
-                if (!closed)
-                {
-                    PreviewStatusTextBlock.Text = message;
-                    PreviewStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
-                }
+                PreviewStatusTextBlock.Text = message;
+                PreviewStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
             });
+        }
     }
 
-    private void WaveformEditor_ValuesChanged(
-        object? sender,
-        EventArgs eventArgs)
-    {
+    private void WaveformEditor_ValuesChanged(object? sender, EventArgs eventArgs) =>
         UpdateValueText();
-        UpdateLoudnessPresentation();
-    }
 
-    private async void AnalyzeLoudnessButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
-    {
-        try
-        {
-            await AnalyzeProposedAsync();
-        }
-        catch (OperationCanceledException)
-        {
-            // Closing the editor cancels analysis.
-        }
-        catch (Exception exception)
-        {
-            LoudnessStatusTextBlock.Text =
-                $"Loudness analysis failed: {exception.Message}";
-            LoudnessStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
-        }
-    }
-
-    private async void NormalizeLoudnessCheckBox_Changed(
-        object sender,
-        RoutedEventArgs eventArgs)
-    {
-        UpdateLoudnessPresentation();
-        if (NormalizeLoudnessCheckBox.IsChecked == true
-            && !HasMatchingValidAnalysis())
-        {
-            try
-            {
-                await AnalyzeProposedAsync();
-            }
-            catch (OperationCanceledException)
-            {
-                // Closing the editor cancels analysis.
-            }
-            catch (Exception exception)
-            {
-                LoudnessStatusTextBlock.Text =
-                    $"Loudness analysis failed: {exception.Message}";
-                LoudnessStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
-            }
-        }
-    }
-
-    private async Task LoadCachedAnalysisAsync()
-    {
-        var key = LoudnessAnalysisKey.Create(
-            sound.ContentHash,
-            CreateProposedSettings());
-        analysisOutcome = await loudnessAnalysisService.TryLoadCachedAsync(
-            key,
-            lifetimeCancellation.Token);
-        if (!closed)
-        {
-            UpdateLoudnessPresentation();
-        }
-    }
-
-    private async Task<LoudnessAnalysisOutcome> EnsureMatchingAnalysisAsync()
-    {
-        if (HasMatchingAnalysis())
-        {
-            return analysisOutcome!;
-        }
-
-        return await AnalyzeProposedAsync();
-    }
-
-    private async Task<LoudnessAnalysisOutcome> AnalyzeProposedAsync()
-    {
-        if (analysisInProgress)
-        {
-            throw new InvalidOperationException(
-                "Loudness analysis is already running.");
-        }
-
-        var settings = CreateProposedSettings();
-        var key = LoudnessAnalysisKey.Create(sound.ContentHash, settings);
-        analysisInProgress = true;
-        AnalyzeLoudnessButton.IsEnabled = false;
-        LoudnessStatusTextBlock.Text =
-            "Analyzing the effective trimmed and faded clip…";
-        LoudnessStatusTextBlock.Foreground = ThemeBrush("TextMutedBrush");
-        try
-        {
-            var outcome = await loudnessAnalysisService.GetOrAnalyzeAsync(
-                key,
-                managedPath,
-                settings,
-                lifetimeCancellation.Token);
-            if (closed)
-            {
-                throw new OperationCanceledException();
-            }
-
-            analysisOutcome = outcome;
-            UpdateLoudnessPresentation();
-            return outcome;
-        }
-        finally
-        {
-            analysisInProgress = false;
-            if (!closed)
-            {
-                AnalyzeLoudnessButton.IsEnabled = true;
-            }
-        }
-    }
-
-    private bool HasMatchingAnalysis()
-    {
-        return analysisOutcome?.Key == LoudnessAnalysisKey.Create(
-            sound.ContentHash,
-            CreateProposedSettings());
-    }
-
-    private bool HasMatchingValidAnalysis()
-    {
-        return HasMatchingAnalysis()
-            && analysisOutcome?.Result.IsValid == true;
-    }
-
-    private void UpdateLoudnessPresentation()
-    {
-        if (analysisInProgress)
-        {
-            return;
-        }
-
-        AnalyzeLoudnessButton.Content = analysisOutcome is null
-            ? "Analyze loudness"
-            : "Reanalyze";
-        if (!HasMatchingAnalysis())
-        {
-            LoudnessStatusTextBlock.Text = analysisOutcome is null
-                ? "Not analyzed. Analysis runs only when requested."
-                : "Analysis is stale because trim or fade settings changed.";
-            LoudnessStatusTextBlock.Foreground = analysisOutcome is null
-                ? ThemeBrush("TextMutedBrush")
-                : ThemeBrush("WarningBrush");
-            MeasuredLoudnessTextBlock.Text = "—";
-            SamplePeakTextBlock.Text = "—";
-            RequestedGainTextBlock.Text = "—";
-            AppliedGainTextBlock.Text = "—";
-            return;
-        }
-
-        var result = analysisOutcome!.Result;
-        if (!result.IsValid)
-        {
-            LoudnessStatusTextBlock.Text =
-                result.InvalidReason ?? "The clip cannot be normalized.";
-            LoudnessStatusTextBlock.Foreground = ThemeBrush("ErrorBrush");
-            MeasuredLoudnessTextBlock.Text = "Unavailable";
-            SamplePeakTextBlock.Text =
-                $"{result.MaximumSamplePeakDbfs:N1} dBFS";
-            RequestedGainTextBlock.Text = "—";
-            AppliedGainTextBlock.Text = "—";
-            return;
-        }
-
-        var calculation = LoudnessNormalization.Calculate(
-            result,
-            normalizationTargetLufs);
-        LoudnessStatusTextBlock.Text = analysisOutcome.Warning
-            ?? (analysisOutcome.LoadedFromCache
-                ? "Loaded matching analysis from the local cache."
-                : "Analysis completed and was cached locally.");
-        LoudnessStatusTextBlock.Foreground = analysisOutcome.Warning is null
-            ? ThemeBrush("SuccessBrush")
-            : ThemeBrush("WarningBrush");
-        MeasuredLoudnessTextBlock.Text =
-            $"{result.IntegratedLoudnessLufs:N1} LUFS";
-        SamplePeakTextBlock.Text =
-            $"{result.MaximumSamplePeakDbfs:N1} dBFS";
-        RequestedGainTextBlock.Text =
-            $"{calculation.RequestedGainDb:+0.0;-0.0;0.0} dB";
-        AppliedGainTextBlock.Text =
-            $"{calculation.AppliedGainDb:+0.0;-0.0;0.0} dB"
-            + (calculation.WasClamped
-                ? " (clamped; target cannot be reached)"
-                : string.Empty);
-    }
-
-    private void TrimStartEarlierButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void TrimStartEarlierButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustTrimStart(-GetAdjustmentIncrement());
-
-    private void TrimStartLaterButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void TrimStartLaterButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustTrimStart(GetAdjustmentIncrement());
-
-    private void TrimEndEarlierButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void TrimEndEarlierButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustTrimEnd(-GetAdjustmentIncrement());
-
-    private void TrimEndLaterButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void TrimEndLaterButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustTrimEnd(GetAdjustmentIncrement());
-
-    private void FadeInDecreaseButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void FadeInDecreaseButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustFadeIn(-GetAdjustmentIncrement());
-
-    private void FadeInIncreaseButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void FadeInIncreaseButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustFadeIn(GetAdjustmentIncrement());
-
-    private void FadeOutDecreaseButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void FadeOutDecreaseButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustFadeOut(-GetAdjustmentIncrement());
-
-    private void FadeOutIncreaseButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs) =>
+    private void FadeOutIncreaseButton_Click(object sender, RoutedEventArgs e) =>
         WaveformEditor.AdjustFadeOut(GetAdjustmentIncrement());
 
-    private AudioClipSettings CreateProposedSettings()
-    {
-        return AudioClipSettings.Create(
+    private AudioClipSettings CreateProposedSettings() =>
+        AudioClipSettings.Create(
             sound.Duration,
             WaveformEditor.TrimStartMilliseconds,
             WaveformEditor.TrimEndMilliseconds
@@ -538,46 +233,30 @@ public partial class EditClipDialog : Window
                     : WaveformEditor.TrimEndMilliseconds,
             WaveformEditor.FadeInMilliseconds,
             WaveformEditor.FadeOutMilliseconds);
-    }
 
     private void UpdateValueText()
     {
-        TrimStartTextBlock.Text = FormatMilliseconds(
-            WaveformEditor.TrimStartMilliseconds);
-        TrimEndTextBlock.Text = FormatMilliseconds(
-            WaveformEditor.TrimEndMilliseconds);
-        FadeInTextBlock.Text = FormatMilliseconds(
-            WaveformEditor.FadeInMilliseconds);
-        FadeOutTextBlock.Text = FormatMilliseconds(
-            WaveformEditor.FadeOutMilliseconds);
-        EffectiveDurationTextBlock.Text = FormatMilliseconds(
-            WaveformEditor.EffectiveDurationMilliseconds);
+        TrimStartTextBlock.Text = FormatMilliseconds(WaveformEditor.TrimStartMilliseconds);
+        TrimEndTextBlock.Text = FormatMilliseconds(WaveformEditor.TrimEndMilliseconds);
+        FadeInTextBlock.Text = FormatMilliseconds(WaveformEditor.FadeInMilliseconds);
+        FadeOutTextBlock.Text = FormatMilliseconds(WaveformEditor.FadeOutMilliseconds);
+        EffectiveDurationTextBlock.Text =
+            FormatMilliseconds(WaveformEditor.EffectiveDurationMilliseconds);
     }
 
-    private static int GetAdjustmentIncrement()
-    {
-        return Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
+    private static int GetAdjustmentIncrement() =>
+        Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
             ? 1000
-            : Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)
-                ? 10
-                : 100;
-    }
+            : Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 10 : 100;
 
-    private static string FormatMilliseconds(int milliseconds)
-    {
-        return FormatTime(TimeSpan.FromMilliseconds(milliseconds));
-    }
+    private static string FormatMilliseconds(int milliseconds) =>
+        FormatTime(TimeSpan.FromMilliseconds(milliseconds));
 
-    private static string FormatTime(TimeSpan duration)
-    {
-        return duration.TotalHours >= 1
+    private static string FormatTime(TimeSpan duration) =>
+        duration.TotalHours >= 1
             ? duration.ToString(@"h\:mm\:ss\.fff")
             : duration.ToString(@"m\:ss\.fff");
-    }
 
-    private Brush ThemeBrush(string resourceKey)
-    {
-        return TryFindResource(resourceKey) as Brush
-            ?? SystemColors.ControlTextBrush;
-    }
+    private Brush ThemeBrush(string resourceKey) =>
+        TryFindResource(resourceKey) as Brush ?? SystemColors.ControlTextBrush;
 }

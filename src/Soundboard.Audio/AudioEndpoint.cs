@@ -6,4 +6,8 @@ public sealed record AudioEndpoint(
     AudioDeviceDirection Direction,
     AudioEndpointState State,
     bool IsDefault,
-    bool IsLikelyVbCable);
+    bool IsLikelyVbCable,
+    string? InterfaceFriendlyName = null,
+    string? EndpointDescription = null,
+    string? ControllerDeviceId = null,
+    string? InterfacePath = null);

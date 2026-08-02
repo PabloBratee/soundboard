@@ -18,18 +18,20 @@ uses no telemetry or cloud storage, and does not access the network.
 - Categories, Favorites, search, and persistent manual ordering
 - Tile accents and other tile personalization
 - Windows global hotkeys using registered key combinations
-- One-shot playback, with one sound effect active at a time
+- One-shot playback with concurrent sounds; re-triggering the same sound
+  restarts it from the beginning
 - Non-destructive trimming, fade-in, and fade-out
 - Decoded waveform editing
-- Optional loudness normalization
-- Safety limiting on the virtual mix, monitor, and local preview
+- Per-sound volume plus one soundboard master volume
+- Automatic microphone startup and endpoint reconnection
+- Windows-default communications microphone mode or a pinned physical device
 - Sound-only monitoring through physical headphones or speakers
 - Duplicate detection using SHA-256
 - Accessible keyboard navigation and screen-reader labels
 
 Soundboard never modifies imported source files. It copies supported files
-into its managed local library and stores trim, fade, category, hotkey, and
-personalization settings as metadata.
+into its managed local library and stores trim, fade, volume, category,
+hotkey, and personalization settings as metadata.
 
 ## Requirements
 
@@ -66,11 +68,12 @@ Unknown Publisher warning. Verify downloads with the included
 
 ## Discord routing
 
-Install VB-CABLE and select these devices:
+On first launch, keep the recommended Windows-default microphone mode or pin
+a physical microphone, then select `CABLE Input` if it was not detected
+automatically. Soundboard captures that microphone continuously whenever the
+app is open. In Discord or a game, select these devices once:
 
 ```text
-Soundboard microphone:      Physical microphone
-Soundboard virtual output:  CABLE Input
 Discord input:              CABLE Output
 Discord output:             Physical headset
 ```
@@ -106,7 +109,7 @@ Files and settings stay under:
 ```
 
 That directory contains `library.json`, `settings.json`, managed copies of
-imported sounds, waveform caches, and loudness-analysis caches. Back up the
+imported sounds, and waveform caches. Back up the
 entire directory while Soundboard is closed to preserve the library. Reinstall
 and uninstall operations preserve this user-data directory by default.
 
@@ -164,7 +167,6 @@ directory.
 ## Limitations
 
 - Windows x64 only
-- One sound effect at a time
 - VB-CABLE remains a separate prerequisite
 - No automatic updates
 - No code signing yet
@@ -174,9 +176,11 @@ directory.
 - No Discord API integration or automatic Discord configuration
 - No tray integration or startup task
 
-The audio engine never starts automatically. Soundboard does not install or
-modify drivers, change Windows default audio devices, or change Discord
-settings.
+Soundboard starts its internal audio service automatically, but does not
+install or modify drivers, change Windows default audio devices, or change
+Discord settings. Windows does not expose a supported application API for
+publishing a mixed stream through an existing physical microphone endpoint;
+see [the architecture decision](docs/audio-architecture.md).
 
 ## License
 

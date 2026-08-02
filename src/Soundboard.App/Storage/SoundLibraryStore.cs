@@ -10,7 +10,7 @@ namespace Soundboard.App.Storage;
 
 public sealed class SoundLibraryStore : IAsyncDisposable
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
     public const int MaximumCategoryNameLength = 60;
     public const int MaximumSoundNameLength = 120;
     public const long MaximumImportFileBytes = 1024L * 1024 * 1024;
@@ -22,7 +22,6 @@ public sealed class SoundLibraryStore : IAsyncDisposable
     private readonly List<SoundCategory> categories = [];
     private readonly Func<CancellationToken, Task>? beforeSaveAsync;
     private readonly WaveformCacheService waveformCacheService;
-    private readonly LoudnessAnalysisService loudnessAnalysisService;
     private bool loaded;
     private bool futureSchemaLoaded;
     private bool disposed;
@@ -39,7 +38,6 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         SoundsPath = Path.Combine(RootPath, "Sounds");
         LibraryFilePath = Path.Combine(RootPath, "library.json");
         waveformCacheService = new WaveformCacheService(RootPath);
-        loudnessAnalysisService = new LoudnessAnalysisService(RootPath);
         this.beforeSaveAsync = beforeSaveAsync;
     }
 
@@ -127,10 +125,6 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             warnings.AddRange(
                 waveformCacheService.CleanupOrphans(
                     entries.Select(entry => entry.ContentHash)));
-            warnings.AddRange(
-                loudnessAnalysisService.CleanupOrphans(
-                    entries.Select(entry => entry.ContentHash)));
-
             return new SoundLibraryLoadResult(
                 availableEntries,
                 categories.ToArray(),
@@ -233,6 +227,13 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 "Select a supported tile accent.",
                 nameof(update));
         }
+        if (!double.IsFinite(update.VolumePercent)
+            || update.VolumePercent is < 0d or > 100d)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(update),
+                "Sound volume must be between 0 and 100 percent.");
+        }
 
         await operationGate.WaitAsync(cancellationToken);
         try
@@ -247,7 +248,8 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 DisplayName = displayName,
                 CategoryId = update.CategoryId,
                 IsFavorite = update.IsFavorite,
-                TileAccent = update.TileAccent
+                TileAccent = update.TileAccent,
+                VolumePercent = update.VolumePercent
             };
             var updatedEntries = entries.ToList();
             updatedEntries[index] = updated;
@@ -320,8 +322,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                 TrimStartMilliseconds = update.TrimStartMilliseconds,
                 TrimEndMilliseconds = update.TrimEndMilliseconds,
                 FadeInMilliseconds = update.FadeInMilliseconds,
-                FadeOutMilliseconds = update.FadeOutMilliseconds,
-                NormalizeLoudness = update.NormalizeLoudness
+                FadeOutMilliseconds = update.FadeOutMilliseconds
             };
             var updatedEntries = entries.ToList();
             updatedEntries[index] = updated;
@@ -722,9 +723,6 @@ public sealed class SoundLibraryStore : IAsyncDisposable
 
             var cacheWarnings = waveformCacheService.DeleteForContentHash(
                 sound.ContentHash).ToList();
-            cacheWarnings.AddRange(
-                loudnessAnalysisService.DeleteForContentHash(
-                    sound.ContentHash));
             return cacheWarnings;
         }
         finally
@@ -733,14 +731,15 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         if (!disposed)
         {
             disposed = true;
             operationGate.Dispose();
-            await loudnessAnalysisService.DisposeAsync();
         }
+
+        return ValueTask.CompletedTask;
     }
 
     private async Task<LibraryReadResult> ReadLibraryAsync(
@@ -1006,9 +1005,9 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     serialized,
                     warnings,
                     ref needsSave);
-                var normalizeLoudness = ReadNormalizationEnabled(
+                var volumePercent = ReadVolumePercent(
                     serialized.Id,
-                    serialized.NormalizeLoudness,
+                    serialized.VolumePercent,
                     warnings,
                     ref needsSave);
 
@@ -1033,7 +1032,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
                     clipSettings.TrimEndMilliseconds,
                     clipSettings.FadeInMilliseconds,
                     clipSettings.FadeOutMilliseconds,
-                    normalizeLoudness);
+                    volumePercent);
                 ValidateEntry(entry, ids);
                 result.Add(entry);
                 if (hotkey is not null)
@@ -1185,7 +1184,7 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         return parsed;
     }
 
-    private static bool ReadNormalizationEnabled(
+    private static double ReadVolumePercent(
         Guid soundId,
         JsonElement? element,
         ICollection<string> warnings,
@@ -1195,24 +1194,23 @@ public sealed class SoundLibraryStore : IAsyncDisposable
             || value.ValueKind
                 is JsonValueKind.Null or JsonValueKind.Undefined)
         {
-            return false;
+            needsSave = true;
+            return 100d;
         }
 
-        if (value.ValueKind == JsonValueKind.True)
+        if (value.ValueKind == JsonValueKind.Number
+            && value.TryGetDouble(out var parsed)
+            && double.IsFinite(parsed)
+            && parsed is >= 0d and <= 100d)
         {
-            return true;
-        }
-
-        if (value.ValueKind == JsonValueKind.False)
-        {
-            return false;
+            return parsed;
         }
 
         warnings.Add(
-            $"Sound {soundId} had an invalid loudness-normalization value "
-            + "and was loaded with normalization disabled.");
+            $"Sound {soundId} had an invalid volume value and was loaded at "
+            + "100 percent.");
         needsSave = true;
-        return false;
+        return 100d;
     }
 
     private static int? ReadOptionalNullableNonNegativeInt32(
@@ -2016,5 +2014,5 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         JsonElement? TrimEndMilliseconds,
         JsonElement? FadeInMilliseconds,
         JsonElement? FadeOutMilliseconds,
-        JsonElement? NormalizeLoudness);
+        JsonElement? VolumePercent);
 }

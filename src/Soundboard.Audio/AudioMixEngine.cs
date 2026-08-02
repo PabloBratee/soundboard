@@ -16,15 +16,11 @@ public sealed class AudioMixEngine : IDisposable
     private readonly object lifecycleLock = new();
     private readonly IAudioFileDecoderFactory decoderFactory;
     private AudioPipelineResources? resources;
-    private SoundPlaybackSession? currentSound;
+    private readonly Dictionary<Guid, SoundPlaybackSession> activeSounds = [];
+    private Guid? mostRecentSoundId;
     private AudioMixEngineDiagnostics? diagnostics;
-    private float microphoneVolume = 1f;
     private float soundVolume = 1f;
     private float monitorVolume = 1f;
-    private bool microphoneMuted;
-    private bool safetyLimiterEnabled = true;
-    private double safetyLimiterCeilingDbfs =
-        SamplePeakLimiter.DefaultCeilingDbfs;
     private bool disposed;
     private int stateValue = (int)AudioEngineState.Stopped;
     private int faultCleanupQueued;
@@ -60,52 +56,24 @@ public sealed class AudioMixEngine : IDisposable
     public long MicrophoneBufferOverflowCount =>
         Interlocked.Read(ref microphoneBufferOverflowCount);
 
-    public bool IsSoundPlaying =>
-        Volatile.Read(ref currentSound) is not null;
-
-    public Guid? CurrentSoundId =>
-        Volatile.Read(ref currentSound)?.SoundId;
-
-    public float MicrophoneVolume
+    public bool IsSoundPlaying
     {
         get
         {
             lock (lifecycleLock)
             {
-                return microphoneVolume;
-            }
-        }
-
-        set
-        {
-            ValidateVolume(value, nameof(value));
-
-            lock (lifecycleLock)
-            {
-                ThrowIfDisposed();
-                microphoneVolume = value;
-                ApplyMicrophoneVolume();
+                return activeSounds.Count > 0;
             }
         }
     }
 
-    public bool MicrophoneMuted
+    public Guid? CurrentSoundId
     {
         get
         {
             lock (lifecycleLock)
             {
-                return microphoneMuted;
-            }
-        }
-
-        set
-        {
-            lock (lifecycleLock)
-            {
-                ThrowIfDisposed();
-                microphoneMuted = value;
-                ApplyMicrophoneVolume();
+                return mostRecentSoundId;
             }
         }
     }
@@ -129,9 +97,9 @@ public sealed class AudioMixEngine : IDisposable
                 ThrowIfDisposed();
                 soundVolume = value;
 
-                if (currentSound is not null)
+                foreach (var session in activeSounds.Values)
                 {
-                    currentSound.SetVirtualVolume(value);
+                    session.SetMasterVolume(value);
                 }
             }
         }
@@ -155,75 +123,9 @@ public sealed class AudioMixEngine : IDisposable
             {
                 ThrowIfDisposed();
                 monitorVolume = value;
-                currentSound?.SetMonitorVolume(value);
-            }
-        }
-    }
-
-    public bool SafetyLimiterEnabled
-    {
-        get
-        {
-            lock (lifecycleLock)
-            {
-                return safetyLimiterEnabled;
-            }
-        }
-
-        set
-        {
-            lock (lifecycleLock)
-            {
-                ThrowIfDisposed();
-                safetyLimiterEnabled = value;
-                if (resources is { } pipeline)
+                foreach (var session in activeSounds.Values)
                 {
-                    pipeline.VirtualLimiter.Enabled = value;
-                    if (pipeline.Monitor is { } monitor)
-                    {
-                        monitor.Limiter.Enabled = value;
-                    }
-
-                    UpdateLimiterDiagnostics(pipeline);
-                }
-            }
-        }
-    }
-
-    public double SafetyLimiterCeilingDbfs
-    {
-        get
-        {
-            lock (lifecycleLock)
-            {
-                return safetyLimiterCeilingDbfs;
-            }
-        }
-
-        set
-        {
-            if (!double.IsFinite(value)
-                || value < SamplePeakLimiter.MinimumCeilingDbfs
-                || value > SamplePeakLimiter.MaximumCeilingDbfs)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(value),
-                    "The limiter ceiling must be between -6.0 and -0.1 dBFS.");
-            }
-
-            lock (lifecycleLock)
-            {
-                ThrowIfDisposed();
-                safetyLimiterCeilingDbfs = value;
-                if (resources is { } pipeline)
-                {
-                    pipeline.VirtualLimiter.CeilingDbfs = value;
-                    if (pipeline.Monitor is { } monitor)
-                    {
-                        monitor.Limiter.CeilingDbfs = value;
-                    }
-
-                    UpdateLimiterDiagnostics(pipeline);
+                    session.SetMonitorVolume(value);
                 }
             }
         }
@@ -265,8 +167,6 @@ public sealed class AudioMixEngine : IDisposable
 
                 resources = newResources;
                 diagnostics = newResources.Diagnostics;
-                ApplyMicrophoneVolume();
-
                 newResources.Output.Play();
                 if (newResources.Monitor is not null)
                 {
@@ -323,7 +223,7 @@ public sealed class AudioMixEngine : IDisposable
         Guid soundId,
         string filePath,
         AudioClipSettings clipSettings,
-        double normalizationGainDb = 0d)
+        double volumePercent = 100d)
     {
         if (soundId == Guid.Empty)
         {
@@ -334,19 +234,13 @@ public sealed class AudioMixEngine : IDisposable
 
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentNullException.ThrowIfNull(clipSettings);
-        if (!double.IsFinite(normalizationGainDb)
-            || normalizationGainDb
-                < LoudnessNormalizationSettings.MaximumAttenuationDb
-            || normalizationGainDb
-                > LoudnessNormalizationSettings.MaximumBoostDb)
+        if (!double.IsFinite(volumePercent)
+            || volumePercent is < 0d or > 100d)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(normalizationGainDb),
-                "Normalization gain must be between -24 and +12 dB.");
+                nameof(volumePercent),
+                "Sound volume must be between 0 and 100 percent.");
         }
-
-        var normalizationGain =
-            (float)Math.Pow(10d, normalizationGainDb / 20d);
 
         lock (lifecycleLock)
         {
@@ -358,7 +252,7 @@ public sealed class AudioMixEngine : IDisposable
                     "Start the audio engine before playing a sound.");
             }
 
-            StopSoundCore(raiseEvent: currentSound is not null);
+            StopSoundCore(soundId, raiseEvent: true);
 
             SoundPlaybackSession? session = null;
 
@@ -373,10 +267,12 @@ public sealed class AudioMixEngine : IDisposable
                     clipSettings,
                     decoderFactory,
                     resources.TargetFormat,
+                    volumePercent,
                     soundVolume,
-                    normalizationGain);
+                    monitorVolume);
 
-                currentSound = session;
+                activeSounds.Add(soundId, session);
+                mostRecentSoundId = soundId;
                 resources.Mixer.AddMixerInput(session.VirtualBranch);
 
                 if (resources.Monitor is not null)
@@ -389,8 +285,7 @@ public sealed class AudioMixEngine : IDisposable
                             clipSettings,
                             decoderFactory,
                             resources.Monitor.TargetFormat,
-                            monitorVolume,
-                            normalizationGain);
+                            session.MonitorBranchGain);
                         session.AttachMonitorBranch(monitorBranch);
                         resources.Monitor.Mixer.AddMixerInput(monitorBranch);
                     }
@@ -414,9 +309,13 @@ public sealed class AudioMixEngine : IDisposable
             {
                 if (session is not null)
                 {
-                    if (ReferenceEquals(currentSound, session))
+                    activeSounds.Remove(soundId);
+                    if (mostRecentSoundId == soundId)
                     {
-                        currentSound = null;
+                        mostRecentSoundId = activeSounds.Count == 0
+                            ? null
+                            : activeSounds.Values
+                                .MaxBy(item => item.SessionId)?.SoundId;
                     }
 
                     resources.Mixer.RemoveMixerInput(
@@ -446,7 +345,16 @@ public sealed class AudioMixEngine : IDisposable
         lock (lifecycleLock)
         {
             ThrowIfDisposed();
-            StopSoundCore(raiseEvent: currentSound is not null);
+            StopAllSoundsCore(raiseEvents: true);
+        }
+    }
+
+    public void StopSound(Guid soundId)
+    {
+        lock (lifecycleLock)
+        {
+            ThrowIfDisposed();
+            StopSoundCore(soundId, raiseEvent: true);
         }
     }
 
@@ -491,17 +399,26 @@ public sealed class AudioMixEngine : IDisposable
                 DataFlow.Render,
                 "render");
 
-            if (!AudioDeviceService.IsLikelyVbCableDeviceName(
-                    renderDevice.FriendlyName))
+            if (AudioDeviceService.IsLikelyVbCableDevice(microphoneDevice))
+            {
+                throw new InvalidOperationException(
+                    $"\"{microphoneDevice.FriendlyName}\" is the Soundboard "
+                    + "virtual microphone and cannot be used as the physical "
+                    + "microphone input because that would create a feedback loop.");
+            }
+
+            if (!AudioDeviceService.IsLikelyVbCableDevice(renderDevice))
             {
                 throw new InvalidOperationException(
                     $"\"{renderDevice.FriendlyName}\" is a physical or "
-                    + "unrecognized render endpoint. This proof of concept "
-                    + "only sends audio to a likely VB-CABLE endpoint to "
+                    + "unrecognized render endpoint. Soundboard only sends "
+                    + "combined audio to a likely VB-CABLE endpoint to "
                     + "prevent loud microphone feedback.");
             }
 
-            var relatedCapture = FindRelatedVbCableCapture(enumerator)
+            var relatedCapture = FindRelatedVbCableCapture(
+                enumerator,
+                renderDevice)
                 ?? throw new InvalidOperationException(
                     "No active VB-CABLE capture endpoint such as "
                     + "\"CABLE Output\" was detected. VB-CABLE installation "
@@ -513,7 +430,7 @@ public sealed class AudioMixEngine : IDisposable
             {
                 throw new NotSupportedException(
                     $"The selected output exposes {renderMixFormat.Channels} "
-                    + "channels. This milestone supports mono and stereo "
+                    + "channels. Soundboard supports mono and stereo "
                     + "output only.");
             }
 
@@ -549,10 +466,8 @@ public sealed class AudioMixEngine : IDisposable
                 out var microphoneResamplingActive,
                 out var microphoneChannelConversionActive);
 
-            var microphoneVolumeProvider =
-                new VolumeSampleProvider(microphoneSamples);
             var microphoneMeter = new MeteringSampleProvider(
-                microphoneVolumeProvider,
+                microphoneSamples,
                 GetSamplesPerNotification(targetFormat));
 
             var mixer = new MixingSampleProvider(targetFormat)
@@ -562,12 +477,9 @@ public sealed class AudioMixEngine : IDisposable
             mixer.AddMixerInput(microphoneMeter);
             mixer.MixerInputEnded += Mixer_MixerInputEnded;
 
-            var virtualLimiter = new SamplePeakLimiter(
-                mixer,
-                safetyLimiterEnabled,
-                safetyLimiterCeilingDbfs);
+            var outputSanitizer = new SampleBoundarySanitizer(mixer);
             var outputMeter = new MeteringSampleProvider(
-                virtualLimiter,
+                outputSanitizer,
                 GetSamplesPerNotification(targetFormat));
 
             output = new WasapiOut(
@@ -591,9 +503,6 @@ public sealed class AudioMixEngine : IDisposable
                 microphoneChannelConversionActive,
                 MicrophoneBufferCapacity)
             {
-                SafetyLimiterEnabled = safetyLimiterEnabled,
-                SafetyLimiterCeilingDbfs = safetyLimiterCeilingDbfs,
-                SafetyLimiterLookahead = virtualLimiter.AddedLatency,
                 MonitoringEnabled = monitorConfiguration.Enabled,
                 MonitorEndpointId = monitorConfiguration.EndpointId,
                 MonitorInitializationStatus = monitorConfiguration.Enabled
@@ -607,10 +516,9 @@ public sealed class AudioMixEngine : IDisposable
                 capture,
                 output,
                 microphoneBuffer,
-                microphoneVolumeProvider,
                 microphoneMeter,
                 mixer,
-                virtualLimiter,
+                outputSanitizer,
                 outputMeter,
                 targetFormat,
                 pipelineDiagnostics);
@@ -723,8 +631,7 @@ public sealed class AudioMixEngine : IDisposable
                 DataFlow.Render,
                 "monitor output");
 
-            if (AudioDeviceService.IsLikelyVbCableDeviceName(
-                    monitorDevice.FriendlyName))
+            if (AudioDeviceService.IsLikelyVbCableDevice(monitorDevice))
             {
                 throw new InvalidOperationException(
                     $"\"{monitorDevice.FriendlyName}\" appears to be a "
@@ -749,12 +656,9 @@ public sealed class AudioMixEngine : IDisposable
             {
                 ReadFully = true
             };
-            var monitorLimiter = new SamplePeakLimiter(
-                monitorMixer,
-                safetyLimiterEnabled,
-                safetyLimiterCeilingDbfs);
+            var monitorSanitizer = new SampleBoundarySanitizer(monitorMixer);
             var monitorMeter = new MeteringSampleProvider(
-                monitorLimiter,
+                monitorSanitizer,
                 GetSamplesPerNotification(monitorTargetFormat));
 
             monitorOutput = new WasapiOut(
@@ -768,7 +672,7 @@ public sealed class AudioMixEngine : IDisposable
                 monitorDevice,
                 monitorOutput,
                 monitorMixer,
-                monitorLimiter,
+                monitorSanitizer,
                 monitorMeter,
                 monitorMixFormat,
                 monitorTargetFormat);
@@ -785,8 +689,16 @@ public sealed class AudioMixEngine : IDisposable
     }
 
     private static (string FriendlyName, string DeviceId)?
-        FindRelatedVbCableCapture(MMDeviceEnumerator enumerator)
+        FindRelatedVbCableCapture(
+            MMDeviceEnumerator enumerator,
+            MMDevice selectedRenderDevice)
     {
+        var selectedControllerId =
+            AudioDeviceService.GetControllerDeviceId(selectedRenderDevice);
+        var candidates = new List<(
+            string FriendlyName,
+            string DeviceId,
+            string? ControllerDeviceId)>();
         var devices = enumerator.EnumerateAudioEndPoints(
             DataFlow.Capture,
             DeviceState.Active);
@@ -795,11 +707,60 @@ public sealed class AudioMixEngine : IDisposable
         {
             using var device = devices[index];
 
-            if (AudioDeviceService.IsLikelyVbCableDeviceName(
-                    device.FriendlyName))
+            if (AudioDeviceService.IsLikelyVbCableDevice(device))
             {
-                return (device.FriendlyName, device.ID);
+                candidates.Add((
+                    device.FriendlyName,
+                    device.ID,
+                    AudioDeviceService.GetControllerDeviceId(device)));
             }
+        }
+
+        var related = !string.IsNullOrWhiteSpace(selectedControllerId)
+            ? candidates
+                .Where(
+                    candidate => string.Equals(
+                        candidate.ControllerDeviceId,
+                        selectedControllerId,
+                        StringComparison.OrdinalIgnoreCase))
+                .ToArray()
+            : [];
+        if (related.Length == 1)
+        {
+            return (related[0].FriendlyName, related[0].DeviceId);
+        }
+
+        if (related.Length > 1)
+        {
+            var preferred = related
+                .Where(
+                    candidate => candidate.FriendlyName.Contains(
+                        "CABLE Output",
+                        StringComparison.OrdinalIgnoreCase))
+                .OrderBy(candidate => candidate.DeviceId, StringComparer.Ordinal)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(preferred.DeviceId))
+            {
+                return (preferred.FriendlyName, preferred.DeviceId);
+            }
+
+            throw new InvalidOperationException(
+                "Multiple VB-CABLE capture endpoints belong to the selected "
+                + "driver instance, but no primary capture endpoint could be "
+                + "identified. Select the standard VB-CABLE render endpoint.");
+        }
+
+        if (candidates.Count == 1)
+        {
+            return (candidates[0].FriendlyName, candidates[0].DeviceId);
+        }
+
+        if (candidates.Count > 1)
+        {
+            throw new InvalidOperationException(
+                "Multiple VB-CABLE capture endpoints are active, and none "
+                + "could be matched to the selected render endpoint by driver "
+                + "instance metadata.");
         }
 
         return null;
@@ -836,11 +797,17 @@ public sealed class AudioMixEngine : IDisposable
         object? sender,
         WaveInEventArgs eventArgs)
     {
+        var pipeline = Volatile.Read(ref resources);
+        if (pipeline is null
+            || !ReferenceEquals(sender, pipeline.Capture)
+            || !pipeline.TryEnterCallback())
+        {
+            return;
+        }
+
         try
         {
-            var pipeline = resources;
-
-            if (pipeline is null || eventArgs.BytesRecorded <= 0)
+            if (eventArgs.BytesRecorded <= 0)
             {
                 return;
             }
@@ -888,67 +855,117 @@ public sealed class AudioMixEngine : IDisposable
             HandleRuntimeFault(
                 $"Microphone capture failed: {exception.Message}");
         }
+        finally
+        {
+            pipeline.ExitCallback();
+        }
     }
 
     private void Capture_RecordingStopped(
         object? sender,
         StoppedEventArgs eventArgs)
     {
-        if (State is AudioEngineState.Stopping or AudioEngineState.Stopped)
+        var pipeline = Volatile.Read(ref resources);
+        if (pipeline is null
+            || !ReferenceEquals(sender, pipeline.Capture)
+            || !pipeline.TryEnterCallback())
         {
             return;
         }
 
-        var details = eventArgs.Exception?.Message
-            ?? "the capture endpoint stopped unexpectedly";
-        HandleRuntimeFault($"Microphone capture stopped: {details}.");
+        try
+        {
+            if (State is AudioEngineState.Stopping or AudioEngineState.Stopped)
+            {
+                return;
+            }
+
+            var details = eventArgs.Exception?.Message
+                ?? "the capture endpoint stopped unexpectedly";
+            HandleRuntimeFault($"Microphone capture stopped: {details}.");
+        }
+        finally
+        {
+            pipeline.ExitCallback();
+        }
     }
 
     private void Output_PlaybackStopped(
         object? sender,
         StoppedEventArgs eventArgs)
     {
-        if (State is AudioEngineState.Stopping or AudioEngineState.Stopped)
+        var pipeline = Volatile.Read(ref resources);
+        if (pipeline is null
+            || !ReferenceEquals(sender, pipeline.Output)
+            || !pipeline.TryEnterCallback())
         {
             return;
         }
 
-        var details = eventArgs.Exception?.Message
-            ?? "the render endpoint stopped unexpectedly";
-        HandleRuntimeFault($"Audio output stopped: {details}.");
+        try
+        {
+            if (State is AudioEngineState.Stopping or AudioEngineState.Stopped)
+            {
+                return;
+            }
+
+            var details = eventArgs.Exception?.Message
+                ?? "the render endpoint stopped unexpectedly";
+            HandleRuntimeFault($"Audio output stopped: {details}.");
+        }
+        finally
+        {
+            pipeline.ExitCallback();
+        }
     }
 
     private void MonitorOutput_PlaybackStopped(
         object? sender,
         StoppedEventArgs eventArgs)
     {
-        var pipeline = resources;
+        var pipeline = Volatile.Read(ref resources);
         if (pipeline?.Monitor is not { } monitor
-            || !ReferenceEquals(sender, monitor.Output))
+            || !ReferenceEquals(sender, monitor.Output)
+            || !pipeline.TryEnterCallback())
         {
             return;
         }
 
-        var state = State;
-        if (state is AudioEngineState.Stopping
-            or AudioEngineState.Stopped
-            or AudioEngineState.Faulted)
+        try
         {
-            return;
-        }
+            var state = State;
+            if (state is AudioEngineState.Stopping
+                or AudioEngineState.Stopped
+                or AudioEngineState.Faulted)
+            {
+                return;
+            }
 
-        var details = eventArgs.Exception?.Message
-            ?? "the physical monitor output stopped unexpectedly";
-        QueueMonitorFault(
-            pipeline,
-            $"Sound monitoring stopped and was disabled for this engine "
-            + $"session: {details}. The virtual microphone remains active.");
+            var details = eventArgs.Exception?.Message
+                ?? "the physical monitor output stopped unexpectedly";
+            QueueMonitorFault(
+                pipeline,
+                $"Sound monitoring stopped and was disabled for this engine "
+                + $"session: {details}. The virtual microphone remains active.");
+        }
+        finally
+        {
+            pipeline.ExitCallback();
+        }
     }
 
     private void MicrophoneMeter_StreamVolume(
         object? sender,
         StreamVolumeEventArgs eventArgs)
     {
+        var pipeline = Volatile.Read(ref resources);
+        if (pipeline is null
+            || !ReferenceEquals(sender, pipeline.MicrophoneMeter)
+            || !pipeline.TryEnterCallback())
+        {
+            return;
+        }
+
         try
         {
             Volatile.Write(
@@ -962,21 +979,30 @@ public sealed class AudioMixEngine : IDisposable
                 $"Microphone metering failed: {exception.Message}",
                 isRecoverable: true);
         }
+        finally
+        {
+            pipeline.ExitCallback();
+        }
     }
 
     private void OutputMeter_StreamVolume(
         object? sender,
         StreamVolumeEventArgs eventArgs)
     {
+        var pipeline = Volatile.Read(ref resources);
+        if (pipeline is null
+            || !ReferenceEquals(sender, pipeline.OutputMeter)
+            || !pipeline.TryEnterCallback())
+        {
+            return;
+        }
+
         try
         {
             Volatile.Write(
                 ref mixedOutputPeak,
                 GetPeak(eventArgs.MaxSampleValues));
-            if (resources is { } pipeline)
-            {
-                UpdateLimiterDiagnostics(pipeline);
-            }
+            UpdateBoundaryDiagnostics(pipeline);
 
             RaisePeakLevelsChanged();
         }
@@ -986,44 +1012,47 @@ public sealed class AudioMixEngine : IDisposable
                 $"Output metering failed: {exception.Message}",
                 isRecoverable: true);
         }
+        finally
+        {
+            pipeline.ExitCallback();
+        }
     }
 
     private void MonitorOutputMeter_StreamVolume(
         object? sender,
         StreamVolumeEventArgs eventArgs)
     {
+        var pipeline = Volatile.Read(ref resources);
+        if (pipeline?.Monitor is not { } monitor
+            || !ReferenceEquals(sender, monitor.OutputMeter)
+            || !pipeline.TryEnterCallback())
+        {
+            return;
+        }
+
         try
         {
-            var pipeline = resources;
-            if (pipeline?.Monitor is not { } monitor
-                || !ReferenceEquals(sender, monitor.OutputMeter))
-            {
-                return;
-            }
-
             var peak = GetPeak(eventArgs.MaxSampleValues);
             Volatile.Write(ref monitorOutputPeak, peak);
             pipeline.Diagnostics = pipeline.Diagnostics with
             {
                 MonitorPeak = peak
             };
-            UpdateLimiterDiagnostics(pipeline);
+            UpdateBoundaryDiagnostics(pipeline);
 
             RaisePeakLevelsChanged();
         }
         catch (Exception exception)
         {
-            var pipeline = resources;
-            if (pipeline is null)
-            {
-                return;
-            }
-
             QueueMonitorFault(
                 pipeline,
                 "Sound monitoring metering failed and monitoring was "
                 + $"disabled: {exception.Message}. The virtual microphone "
                 + "remains active.");
+        }
+        finally
+        {
+            pipeline.ExitCallback();
         }
     }
 
@@ -1037,10 +1066,13 @@ public sealed class AudioMixEngine : IDisposable
             return;
         }
 
-        var session = Volatile.Read(ref currentSound);
-        if (session is null
-            || !ReferenceEquals(session.VirtualBranch, branch)
-            || !session.TryQueueAuthoritativeCompletion())
+        SoundPlaybackSession? session;
+        lock (lifecycleLock)
+        {
+            session = activeSounds.Values.FirstOrDefault(
+                candidate => ReferenceEquals(candidate.VirtualBranch, branch));
+        }
+        if (session is null || !session.TryQueueAuthoritativeCompletion())
         {
             return;
         }
@@ -1061,10 +1093,13 @@ public sealed class AudioMixEngine : IDisposable
             return;
         }
 
-        var session = Volatile.Read(ref currentSound);
-        if (session is null
-            || !ReferenceEquals(session.MonitorBranch, branch)
-            || !session.TryQueueMonitorCompletion())
+        SoundPlaybackSession? session;
+        lock (lifecycleLock)
+        {
+            session = activeSounds.Values.FirstOrDefault(
+                candidate => ReferenceEquals(candidate.MonitorBranch, branch));
+        }
+        if (session is null || !session.TryQueueMonitorCompletion())
         {
             return;
         }
@@ -1082,10 +1117,16 @@ public sealed class AudioMixEngine : IDisposable
 
         for (var index = 0; index < values.Count; index++)
         {
-            peak = Math.Max(peak, Math.Abs(values[index]));
+            var value = values[index];
+            if (!float.IsFinite(value))
+            {
+                continue;
+            }
+
+            peak = Math.Max(peak, Math.Abs(value));
         }
 
-        return peak;
+        return Math.Clamp(peak, 0f, 1f);
     }
 
     private void OnSoundPlaybackCompleted(
@@ -1094,7 +1135,8 @@ public sealed class AudioMixEngine : IDisposable
     {
         lock (lifecycleLock)
         {
-            if (!ReferenceEquals(currentSound, session))
+            if (!activeSounds.TryGetValue(session.SoundId, out var active)
+                || !ReferenceEquals(active, session))
             {
                 return;
             }
@@ -1107,7 +1149,13 @@ public sealed class AudioMixEngine : IDisposable
                 monitorBranch.Dispose();
             }
 
-            currentSound = null;
+            activeSounds.Remove(session.SoundId);
+            if (mostRecentSoundId == session.SoundId)
+            {
+                mostRecentSoundId = activeSounds.Count == 0
+                    ? null
+                    : activeSounds.Values.MaxBy(item => item.SessionId)?.SoundId;
+            }
             session.Dispose();
             ClearPlaybackDiagnostics();
             RaiseSoundPlaybackStateChanged(
@@ -1131,7 +1179,8 @@ public sealed class AudioMixEngine : IDisposable
     {
         lock (lifecycleLock)
         {
-            if (!ReferenceEquals(currentSound, session)
+            if (!activeSounds.TryGetValue(session.SoundId, out var active)
+                || !ReferenceEquals(active, session)
                 || !ReferenceEquals(session.MonitorBranch, branch))
             {
                 return;
@@ -1181,7 +1230,7 @@ public sealed class AudioMixEngine : IDisposable
             SetState(AudioEngineState.Stopping);
         }
 
-        StopSoundCore(raiseEvent: currentSound is not null);
+        StopAllSoundsCore(raiseEvents: true);
 
         var pipeline = resources;
         resources = null;
@@ -1198,14 +1247,26 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
-    private void StopSoundCore(bool raiseEvent)
+    private void StopAllSoundsCore(bool raiseEvents)
     {
-        var session = currentSound;
-        currentSound = null;
+        foreach (var soundId in activeSounds.Keys.ToArray())
+        {
+            StopSoundCore(soundId, raiseEvents);
+        }
+    }
 
-        if (session is null)
+    private void StopSoundCore(Guid soundId, bool raiseEvent)
+    {
+        if (!activeSounds.Remove(soundId, out var session))
         {
             return;
+        }
+
+        if (mostRecentSoundId == soundId)
+        {
+            mostRecentSoundId = activeSounds.Count == 0
+                ? null
+                : activeSounds.Values.MaxBy(item => item.SessionId)?.SoundId;
         }
 
         resources?.Mixer.RemoveMixerInput(session.VirtualBranch);
@@ -1225,15 +1286,6 @@ public sealed class AudioMixEngine : IDisposable
             RaiseSoundPlaybackStateChanged(
                 SoundPlaybackChangeReason.Stopped,
                 session);
-        }
-    }
-
-    private void ApplyMicrophoneVolume()
-    {
-        if (resources is not null)
-        {
-            resources.MicrophoneVolume.Volume =
-                microphoneMuted ? 0f : microphoneVolume;
         }
     }
 
@@ -1287,11 +1339,14 @@ public sealed class AudioMixEngine : IDisposable
         monitor.OutputMeter.StreamVolume -=
             MonitorOutputMeter_StreamVolume;
 
-        var monitorBranch = currentSound?.DetachMonitorBranch();
-        if (monitorBranch is not null)
+        foreach (var session in activeSounds.Values)
         {
-            monitor.Mixer.RemoveMixerInput(monitorBranch);
-            monitorBranch.Dispose();
+            var monitorBranch = session.DetachMonitorBranch();
+            if (monitorBranch is not null)
+            {
+                monitor.Mixer.RemoveMixerInput(monitorBranch);
+                monitorBranch.Dispose();
+            }
         }
 
         monitor.Dispose();
@@ -1326,32 +1381,22 @@ public sealed class AudioMixEngine : IDisposable
             CurrentPlaybackSessionId = session.SessionId,
             MonitorResamplingActive = monitorBranch?.ResamplingActive,
             MonitorChannelConversionActive =
-                monitorBranch?.ChannelConversionActive
+                monitorBranch?.ChannelConversionActive,
+            ActiveSoundCount = activeSounds.Count
         };
         diagnostics = resources.Diagnostics;
     }
 
-    private void UpdateLimiterDiagnostics(AudioPipelineResources pipeline)
+    private void UpdateBoundaryDiagnostics(AudioPipelineResources pipeline)
     {
-        var monitorLimiter = pipeline.Monitor?.Limiter;
+        var monitorSanitizer = pipeline.Monitor?.Sanitizer;
         pipeline.Diagnostics = pipeline.Diagnostics with
         {
-            SafetyLimiterEnabled = pipeline.VirtualLimiter.Enabled,
-            SafetyLimiterCeilingDbfs =
-                pipeline.VirtualLimiter.CeilingDbfs,
-            SafetyLimiterLookahead =
-                pipeline.VirtualLimiter.AddedLatency,
-            VirtualLimiterCurrentGainReductionDb =
-                pipeline.VirtualLimiter.CurrentGainReductionDb,
-            VirtualLimiterMaximumGainReductionDb =
-                pipeline.VirtualLimiter.MaximumGainReductionDb,
-            MonitorLimiterCurrentGainReductionDb =
-                monitorLimiter?.CurrentGainReductionDb ?? 0f,
-            MonitorLimiterMaximumGainReductionDb =
-                monitorLimiter?.MaximumGainReductionDb ?? 0f,
-            LimiterNonFiniteSampleCount =
-                pipeline.VirtualLimiter.NonFiniteSampleCount
-                + (monitorLimiter?.NonFiniteSampleCount ?? 0)
+            ClippedSampleCount = pipeline.OutputSanitizer.ClippedSampleCount
+                + (monitorSanitizer?.ClippedSampleCount ?? 0),
+            NonFiniteSampleCount =
+                pipeline.OutputSanitizer.NonFiniteSampleCount
+                + (monitorSanitizer?.NonFiniteSampleCount ?? 0)
         };
         diagnostics = pipeline.Diagnostics;
     }
@@ -1363,12 +1408,15 @@ public sealed class AudioMixEngine : IDisposable
             return;
         }
 
+        var latest = activeSounds.Values.MaxBy(item => item.SessionId);
         resources.Diagnostics = resources.Diagnostics with
         {
-            CurrentSoundId = null,
-            CurrentPlaybackSessionId = null,
-            MonitorResamplingActive = null,
-            MonitorChannelConversionActive = null,
+            CurrentSoundId = latest?.SoundId,
+            CurrentPlaybackSessionId = latest?.SessionId,
+            MonitorResamplingActive = latest?.MonitorBranch?.ResamplingActive,
+            MonitorChannelConversionActive =
+                latest?.MonitorBranch?.ChannelConversionActive,
+            ActiveSoundCount = activeSounds.Count,
             MonitorPeak = 0f
         };
         diagnostics = resources.Diagnostics;
@@ -1468,12 +1516,12 @@ public sealed class AudioMixEngine : IDisposable
 
     private static void ValidateVolume(float value, string parameterName)
     {
-        if (value is < 0f or > 2f)
+        if (!float.IsFinite(value) || value is < 0f or > 1f)
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 value,
-                "Volume must be between 0.0 and 2.0.");
+                "Volume gain must be between silence (0.0) and unity (1.0).");
         }
     }
 
@@ -1530,6 +1578,9 @@ public sealed class AudioMixEngine : IDisposable
 
     private sealed class AudioPipelineResources : IDisposable
     {
+        private readonly object callbackLock = new();
+        private int activeCallbackCount;
+        private bool callbacksClosing;
         private bool disposed;
 
         public AudioPipelineResources(
@@ -1538,10 +1589,9 @@ public sealed class AudioMixEngine : IDisposable
             WasapiCapture capture,
             WasapiOut output,
             BufferedWaveProvider microphoneBuffer,
-            VolumeSampleProvider microphoneVolume,
             MeteringSampleProvider microphoneMeter,
             MixingSampleProvider mixer,
-            SamplePeakLimiter virtualLimiter,
+            SampleBoundarySanitizer outputSanitizer,
             MeteringSampleProvider outputMeter,
             WaveFormat targetFormat,
             AudioMixEngineDiagnostics diagnostics)
@@ -1551,10 +1601,9 @@ public sealed class AudioMixEngine : IDisposable
             Capture = capture;
             Output = output;
             MicrophoneBuffer = microphoneBuffer;
-            MicrophoneVolume = microphoneVolume;
             MicrophoneMeter = microphoneMeter;
             Mixer = mixer;
-            VirtualLimiter = virtualLimiter;
+            OutputSanitizer = outputSanitizer;
             OutputMeter = outputMeter;
             TargetFormat = targetFormat;
             Diagnostics = diagnostics;
@@ -1570,13 +1619,11 @@ public sealed class AudioMixEngine : IDisposable
 
         public BufferedWaveProvider MicrophoneBuffer { get; }
 
-        public VolumeSampleProvider MicrophoneVolume { get; }
-
         public MeteringSampleProvider MicrophoneMeter { get; }
 
         public MixingSampleProvider Mixer { get; }
 
-        public SamplePeakLimiter VirtualLimiter { get; }
+        public SampleBoundarySanitizer OutputSanitizer { get; }
 
         public MeteringSampleProvider OutputMeter { get; }
 
@@ -1586,6 +1633,32 @@ public sealed class AudioMixEngine : IDisposable
 
         public MonitorPipelineResources? Monitor { get; set; }
 
+        public bool TryEnterCallback()
+        {
+            lock (callbackLock)
+            {
+                if (callbacksClosing)
+                {
+                    return false;
+                }
+
+                activeCallbackCount++;
+                return true;
+            }
+        }
+
+        public void ExitCallback()
+        {
+            lock (callbackLock)
+            {
+                activeCallbackCount--;
+                if (activeCallbackCount == 0)
+                {
+                    System.Threading.Monitor.PulseAll(callbackLock);
+                }
+            }
+        }
+
         public void Dispose()
         {
             if (disposed)
@@ -1594,6 +1667,10 @@ public sealed class AudioMixEngine : IDisposable
             }
 
             disposed = true;
+            lock (callbackLock)
+            {
+                callbacksClosing = true;
+            }
 
             try
             {
@@ -1611,6 +1688,14 @@ public sealed class AudioMixEngine : IDisposable
             catch
             {
                 // Device removal can make Stop fail. Dispose still runs.
+            }
+
+            lock (callbackLock)
+            {
+                while (activeCallbackCount > 0)
+                {
+                    System.Threading.Monitor.Wait(callbackLock);
+                }
             }
 
             RunCleanupWithoutThrow(MicrophoneBuffer.ClearBuffer);
@@ -1632,7 +1717,7 @@ public sealed class AudioMixEngine : IDisposable
             MMDevice device,
             WasapiOut output,
             MixingSampleProvider mixer,
-            SamplePeakLimiter limiter,
+            SampleBoundarySanitizer sanitizer,
             MeteringSampleProvider outputMeter,
             WaveFormat mixFormat,
             WaveFormat targetFormat)
@@ -1640,7 +1725,7 @@ public sealed class AudioMixEngine : IDisposable
             Device = device;
             Output = output;
             Mixer = mixer;
-            Limiter = limiter;
+            Sanitizer = sanitizer;
             OutputMeter = outputMeter;
             MixFormat = mixFormat;
             TargetFormat = targetFormat;
@@ -1652,7 +1737,7 @@ public sealed class AudioMixEngine : IDisposable
 
         public MixingSampleProvider Mixer { get; }
 
-        public SamplePeakLimiter Limiter { get; }
+        public SampleBoundarySanitizer Sanitizer { get; }
 
         public MeteringSampleProvider OutputMeter { get; }
 

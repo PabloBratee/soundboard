@@ -19,7 +19,7 @@ internal static class AudioFormatNormalizer
         {
             throw new NotSupportedException(
                 $"The microphone exposes {nativeFormat.Channels} channels. "
-                + "This milestone supports mono and stereo microphones only.");
+                + "Soundboard supports mono and stereo microphones only.");
         }
 
         if (nativeFormat.Encoding == WaveFormatEncoding.IeeeFloat
@@ -83,7 +83,7 @@ internal static class AudioFormatNormalizer
         {
             throw new NotSupportedException(
                 $"The selected output exposes {targetFormat.Channels} channels. "
-                + "This milestone supports mono and stereo output only.");
+                + "Soundboard supports mono and stereo output only.");
         }
 
         ISampleProvider normalized = source;

@@ -1,7 +1,6 @@
 using System.IO;
 using System.Text.Json;
 using Soundboard.App.Hotkeys;
-using Soundboard.Audio;
 
 namespace Soundboard.App.Storage;
 
@@ -50,24 +49,55 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
 
         try
         {
-            await using var stream = new FileStream(
+            ApplicationSettings validated;
+            string? migrationWarning;
+            string? warning;
+            bool needsSave;
+            await using (var stream = new FileStream(
                 SettingsFilePath,
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
                 bufferSize: 81920,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var settings = await JsonSerializer
-                .DeserializeAsync<ApplicationSettings>(
-                    stream,
-                    JsonOptions,
-                    cancellationToken);
-            var validated = Validate(
-                settings ?? ApplicationSettings.Default,
-                out var warning);
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            using (var document = await JsonDocument.ParseAsync(
+                stream,
+                cancellationToken: cancellationToken))
+            {
+                var settings = document.RootElement
+                    .Deserialize<ApplicationSettings>(JsonOptions);
+                var migrated = Migrate(
+                    settings ?? ApplicationSettings.Default,
+                    document.RootElement,
+                    out migrationWarning,
+                    out needsSave);
+                validated = Validate(migrated, out warning);
+            }
+
+            var combinedWarnings = new[] { migrationWarning, warning }
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .ToList();
+            if (needsSave)
+            {
+                try
+                {
+                    await SaveAsync(validated, cancellationToken);
+                }
+                catch (Exception exception)
+                    when (exception is IOException
+                        or UnauthorizedAccessException)
+                {
+                    combinedWarnings.Add(
+                        "Migrated settings are active in memory but could not "
+                        + $"be saved: {exception.Message}");
+                }
+            }
+
             return (
                 validated,
-                warning);
+                combinedWarnings.Count == 0
+                    ? null
+                    : string.Join(" ", combinedWarnings));
         }
         catch (Exception exception)
             when (exception is JsonException
@@ -163,50 +193,53 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
                 + hotkeyError);
         }
 
-        var targetLufs = settings.NormalizationTargetLufs;
-        if (!double.IsFinite(targetLufs)
-            || targetLufs
-                < LoudnessNormalizationSettings.MinimumTargetLufs
-            || targetLufs
-                > LoudnessNormalizationSettings.MaximumTargetLufs)
-        {
-            targetLufs = LoudnessNormalizationSettings.DefaultTargetLufs;
-            warnings.Add(
-                "The saved loudness target was invalid and was reset to "
-                + "-16 LUFS.");
-        }
-
-        var limiterCeiling = settings.SafetyLimiterCeilingDbfs;
-        if (!double.IsFinite(limiterCeiling)
-            || limiterCeiling < SamplePeakLimiter.MinimumCeilingDbfs
-            || limiterCeiling > SamplePeakLimiter.MaximumCeilingDbfs)
-        {
-            limiterCeiling = SamplePeakLimiter.DefaultCeilingDbfs;
-            warnings.Add(
-                "The saved safety-limiter ceiling was invalid and was reset "
-                + "to -1.0 dBFS.");
-        }
-
         warning = warnings.Count == 0
             ? null
             : string.Join(" ", warnings);
         return settings with
         {
-            MicrophoneVolume = Math.Clamp(
-                settings.MicrophoneVolume,
-                0d,
-                2d),
-            SoundVolume = Math.Clamp(settings.SoundVolume, 0d, 2d),
-            MonitorVolume = Math.Clamp(settings.MonitorVolume, 0d, 2d),
+            SchemaVersion = ApplicationSettings.CurrentSchemaVersion,
+            SoundVolume = ValidateVolume(settings.SoundVolume),
+            MonitorVolume = ValidateVolume(settings.MonitorVolume),
             StopSoundHotkey = stopSoundHotkey,
-            NormalizationTargetLufs = targetLufs,
-            SafetyLimiterCeilingDbfs = limiterCeiling,
             WindowWidth = ValidateDimension(
                 settings.WindowWidth,
                 minimum: MinimumWindowWidth),
             WindowHeight = ValidateDimension(
                 settings.WindowHeight,
                 minimum: MinimumWindowHeight)
+        };
+    }
+
+    private static ApplicationSettings Migrate(
+        ApplicationSettings settings,
+        JsonElement root,
+        out string? warning,
+        out bool needsSave)
+    {
+        var version = root.TryGetProperty("schemaVersion", out var versionElement)
+            && versionElement.TryGetInt32(out var parsedVersion)
+                ? parsedVersion
+                : 1;
+        if (version >= ApplicationSettings.CurrentSchemaVersion)
+        {
+            warning = null;
+            needsSave = false;
+            return settings;
+        }
+
+        var hadSavedMicrophone = !string.IsNullOrWhiteSpace(
+            settings.MicrophoneEndpointId);
+        var hadSavedVirtualOutput = !string.IsNullOrWhiteSpace(
+            settings.VirtualOutputEndpointId);
+        warning = "Migrated settings to automatic audio startup. Obsolete "
+            + "microphone gain, normalization, and limiter settings were removed.";
+        needsSave = true;
+        return settings with
+        {
+            SchemaVersion = ApplicationSettings.CurrentSchemaVersion,
+            UseDefaultMicrophone = !hadSavedMicrophone,
+            SetupCompleted = hadSavedMicrophone && hadSavedVirtualOutput
         };
     }
 
@@ -219,6 +252,13 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
             && dimension >= minimum
                 ? dimension
                 : null;
+    }
+
+    private static double ValidateVolume(double value)
+    {
+        return double.IsFinite(value)
+            ? Math.Clamp(value, 0d, 1d)
+            : 1d;
     }
 
     private static void TryDeleteFile(string path)

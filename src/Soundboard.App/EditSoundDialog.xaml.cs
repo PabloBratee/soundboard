@@ -34,6 +34,7 @@ public partial class EditSoundDialog : Window
             Enum.GetValues<SoundTileAccent>();
         TileAccentComboBox.SelectedItem = sound.TileAccent;
         FavoriteCheckBox.IsChecked = sound.IsFavorite;
+        VolumeSlider.Value = sound.VolumePercent;
         OriginalFileNameTextBlock.Text = sound.OriginalFileName;
         DurationTextBlock.Text = sound.Duration.TotalHours >= 1
             ? sound.Duration.ToString(@"h\:mm\:ss")
@@ -62,6 +63,18 @@ public partial class EditSoundDialog : Window
         TileAccentComboBox.SelectedItem is SoundTileAccent accent
             ? accent
             : SoundTileAccent.Default;
+
+    public double VolumePercent => Math.Round(VolumeSlider.Value);
+
+    private void VolumeSlider_ValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> eventArgs)
+    {
+        if (VolumeTextBlock is not null)
+        {
+            VolumeTextBlock.Text = $"{Math.Round(eventArgs.NewValue):N0}%";
+        }
+    }
 
     private void SaveButton_Click(
         object sender,

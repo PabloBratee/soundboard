@@ -25,16 +25,17 @@ public partial class MainWindow : Window
 
     private readonly AudioDeviceService audioDeviceService = new();
     private readonly AudioMixEngine audioEngine = new();
+    private readonly AudioServiceLifecycle audioServiceLifecycle;
     private readonly SoundLibraryStore soundLibraryStore = new();
     private readonly WaveformCacheService waveformCacheService = new();
     private readonly AudioPreviewService previewService = new();
-    private readonly LoudnessAnalysisService loudnessAnalysisService = new();
     private readonly ApplicationSettingsStore settingsStore = new();
     private readonly ObservableCollection<SoundTileViewModel> soundTiles = [];
     private readonly ObservableCollection<SoundCategory> soundCategories = [];
     private readonly ObservableCollection<LibraryViewItem> libraryViews = [];
     private readonly SemaphoreSlim libraryActionGate = new(1, 1);
     private readonly SemaphoreSlim soundTriggerGate = new(1, 1);
+    private readonly SemaphoreSlim audioServiceGate = new(1, 1);
     private readonly ICollectionView soundTilesView;
 
     /// <summary>
@@ -51,7 +52,10 @@ public partial class MainWindow : Window
     private AudioFormatInfo? selectedRenderFormat;
     private AudioFormatInfo? selectedMonitorFormat;
     private ApplicationSettings appSettings = ApplicationSettings.Default;
+    private string? pinnedMicrophoneEndpointId;
+    private string? configuredVirtualOutputEndpointId;
     private CancellationTokenSource? settingsSaveDelayCancellation;
+    private CancellationTokenSource? deviceChangeDebounceCancellation;
     private Guid? currentSoundId;
     private long currentSoundSessionId;
     private string lastDiagnosticMessage =
@@ -70,6 +74,7 @@ public partial class MainWindow : Window
     private Guid? draggedSoundId;
     private long formatRequestNumber;
     private long soundTriggerRequestGeneration;
+    private long audioServiceRequestGeneration;
     private EmptyStateAction emptyStateAction = EmptyStateAction.Import;
 
     /// <summary>
@@ -100,20 +105,8 @@ public partial class MainWindow : Window
     private ComboBox MonitorOutputComboBox =>
         settingsWindow.MonitorOutputComboBox;
 
-    private Slider MicrophoneVolumeSlider =>
-        settingsWindow.MicrophoneVolumeSlider;
-
     private Slider MonitorVolumeSlider =>
         settingsWindow.MonitorVolumeSlider;
-
-    private Slider NormalizationTargetSlider =>
-        settingsWindow.NormalizationTargetSlider;
-
-    private Slider LimiterCeilingSlider =>
-        settingsWindow.LimiterCeilingSlider;
-
-    private CheckBox MuteMicrophoneCheckBox =>
-        settingsWindow.MuteMicrophoneCheckBox;
 
     private CheckBox MonitorSoundsCheckBox =>
         settingsWindow.MonitorSoundsCheckBox;
@@ -121,8 +114,8 @@ public partial class MainWindow : Window
     private CheckBox GlobalHotkeysCheckBox =>
         settingsWindow.GlobalHotkeysCheckBox;
 
-    private CheckBox SafetyLimiterCheckBox =>
-        settingsWindow.SafetyLimiterCheckBox;
+    private CheckBox UseDefaultMicrophoneCheckBox =>
+        settingsWindow.UseDefaultMicrophoneCheckBox;
 
     private ProgressBar MicrophonePeakProgressBar =>
         settingsWindow.MicrophonePeakProgressBar;
@@ -144,9 +137,6 @@ public partial class MainWindow : Window
 
     private TextBox DiagnosticStatusTextBox =>
         settingsWindow.DiagnosticStatusTextBox;
-
-    private TextBlock MicrophoneVolumeTextBlock =>
-        settingsWindow.MicrophoneVolumeTextBlock;
 
     private TextBlock MicrophonePeakTextBlock =>
         settingsWindow.MicrophonePeakTextBlock;
@@ -178,18 +168,6 @@ public partial class MainWindow : Window
     private TextBlock TargetFormatTextBlock =>
         settingsWindow.TargetFormatTextBlock;
 
-    private TextBlock NormalizationTargetTextBlock =>
-        settingsWindow.NormalizationTargetTextBlock;
-
-    private TextBlock LimiterCeilingTextBlock =>
-        settingsWindow.LimiterCeilingTextBlock;
-
-    private TextBlock LimiterStatusTextBlock =>
-        settingsWindow.LimiterStatusTextBlock;
-
-    private TextBlock LimiterGainReductionTextBlock =>
-        settingsWindow.LimiterGainReductionTextBlock;
-
     private TextBlock RegisteredHotkeyCountTextBlock =>
         settingsWindow.RegisteredHotkeyCountTextBlock;
 
@@ -204,6 +182,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        audioServiceLifecycle = new AudioServiceLifecycle(audioEngine);
         InitializeComponent();
         WindowTheme.UseDarkTitleBar(this);
 
@@ -221,12 +200,10 @@ public partial class MainWindow : Window
             DeviceComboBox_SelectionChanged;
         MonitorOutputComboBox.SelectionChanged +=
             DeviceComboBox_SelectionChanged;
-        MicrophoneVolumeSlider.ValueChanged +=
-            MicrophoneVolumeSlider_ValueChanged;
-        MuteMicrophoneCheckBox.Checked +=
-            MuteMicrophoneCheckBox_Changed;
-        MuteMicrophoneCheckBox.Unchecked +=
-            MuteMicrophoneCheckBox_Changed;
+        UseDefaultMicrophoneCheckBox.Checked +=
+            UseDefaultMicrophoneCheckBox_Changed;
+        UseDefaultMicrophoneCheckBox.Unchecked +=
+            UseDefaultMicrophoneCheckBox_Changed;
         SoundVolumeSlider.ValueChanged +=
             SoundVolumeSlider_ValueChanged;
         MonitorSoundsCheckBox.Checked +=
@@ -239,18 +216,12 @@ public partial class MainWindow : Window
             GlobalHotkeysCheckBox_Changed;
         GlobalHotkeysCheckBox.Unchecked +=
             GlobalHotkeysCheckBox_Changed;
-        NormalizationTargetSlider.ValueChanged +=
-            NormalizationTargetSlider_ValueChanged;
-        SafetyLimiterCheckBox.Checked +=
-            SafetyLimiterCheckBox_Changed;
-        SafetyLimiterCheckBox.Unchecked +=
-            SafetyLimiterCheckBox_Changed;
-        LimiterCeilingSlider.ValueChanged +=
-            LimiterCeilingSlider_ValueChanged;
 
         // Settings-window commands are wired here rather than in that
         // window's XAML so all application logic stays in one place.
         RefreshDevicesButton.Click += RefreshDevicesButton_Click;
+        settingsWindow.TestMicrophoneButton.Click += TestMicrophoneButton_Click;
+        settingsWindow.CompleteSetupButton.Click += CompleteSetupButton_Click;
         RetryHotkeysButton.Click += RetryHotkeysButton_Click;
         settingsWindow.AssignStopHotkeyButton.Click +=
             AssignStopHotkeyButton_Click;
@@ -258,8 +229,7 @@ public partial class MainWindow : Window
         settingsWindow.StoragePathsTextBox.Text = string.Join(
             Environment.NewLine,
             $"Library:        {soundLibraryStore.RootPath}",
-            $"Waveform cache: {waveformCacheService.WaveformsPath}",
-            $"Analysis cache: {loudnessAnalysisService.AnalysisPath}");
+            $"Waveform cache: {waveformCacheService.WaveformsPath}");
 
         SizeChanged += MainWindow_SizeChanged;
 
@@ -268,6 +238,8 @@ public partial class MainWindow : Window
         audioEngine.PeakLevelsChanged += AudioEngine_PeakLevelsChanged;
         audioEngine.SoundPlaybackStateChanged +=
             AudioEngine_SoundPlaybackStateChanged;
+        audioDeviceService.DevicesChanged += AudioDeviceService_DevicesChanged;
+        SystemEvents.PowerModeChanged += SystemEvents_PowerModeChanged;
 
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
@@ -288,6 +260,20 @@ public partial class MainWindow : Window
                 appSettings.MicrophoneEndpointId,
                 appSettings.VirtualOutputEndpointId,
                 appSettings.MonitorOutputEndpointId);
+            await audioServiceGate.WaitAsync();
+            try
+            {
+                await StartAudioServiceAsync("application startup");
+            }
+            finally
+            {
+                audioServiceGate.Release();
+            }
+            if (!appSettings.SetupCompleted)
+            {
+                settingsWindow.SetupBanner.Visibility = Visibility.Visible;
+                settingsWindow.ShowOrActivate(this);
+            }
         }
         catch (Exception exception)
         {
@@ -323,8 +309,10 @@ public partial class MainWindow : Window
 
         var settingsResult = await settingsStore.LoadAsync();
         appSettings = settingsResult.Settings;
+        pinnedMicrophoneEndpointId = appSettings.MicrophoneEndpointId;
+        configuredVirtualOutputEndpointId =
+            appSettings.VirtualOutputEndpointId;
         ApplySettingsToWindowAndControls();
-        await RefreshCachedAnalysisStatesAsync();
 
         var warnings = new List<string>();
         if (settingsResult.Warning is not null)
@@ -344,22 +332,6 @@ public partial class MainWindow : Window
         StatusTextBlock.Text =
             $"Loaded {soundTiles.Count} sound(s) from the local library.";
         RefreshDiagnosticStatus();
-    }
-
-    private async Task RefreshCachedAnalysisStatesAsync()
-    {
-        foreach (var tile in soundTiles.Where(
-                     candidate => candidate.Sound.NormalizeLoudness))
-        {
-            var key = LoudnessAnalysisKey.Create(
-                tile.Sound.ContentHash,
-                tile.Sound.ClipSettings);
-            var cached = await loudnessAnalysisService.TryLoadCachedAsync(key);
-            if (cached is not null)
-            {
-                tile.SetLoudnessAnalysis(key, cached.Result);
-            }
-        }
     }
 
     private void InitializeGlobalHotkeys()
@@ -414,10 +386,10 @@ public partial class MainWindow : Window
         isApplyingSettings = true;
         try
         {
-            MicrophoneVolumeSlider.Value =
-                appSettings.MicrophoneVolume * 100d;
-            MuteMicrophoneCheckBox.IsChecked =
-                appSettings.MicrophoneMuted;
+            UseDefaultMicrophoneCheckBox.IsChecked =
+                appSettings.UseDefaultMicrophone;
+            MicrophoneComboBox.IsEnabled =
+                !appSettings.UseDefaultMicrophone;
             SoundVolumeSlider.Value =
                 appSettings.SoundVolume * 100d;
             MonitorSoundsCheckBox.IsChecked =
@@ -426,17 +398,13 @@ public partial class MainWindow : Window
                 appSettings.MonitorVolume * 100d;
             GlobalHotkeysCheckBox.IsChecked =
                 appSettings.GlobalHotkeysEnabled;
-            NormalizationTargetSlider.Value =
-                appSettings.NormalizationTargetLufs;
-            SafetyLimiterCheckBox.IsChecked =
-                appSettings.SafetyLimiterEnabled;
-            LimiterCeilingSlider.Value =
-                appSettings.SafetyLimiterCeilingDbfs;
-            audioEngine.SafetyLimiterEnabled =
-                appSettings.SafetyLimiterEnabled;
-            audioEngine.SafetyLimiterCeilingDbfs =
-                appSettings.SafetyLimiterCeilingDbfs;
-            UpdateLoudnessAndLimiterPresentation();
+            audioEngine.SoundVolume = AudioGain.FromPercent(
+                appSettings.SoundVolume * 100d);
+            audioEngine.MonitorVolume = AudioGain.FromPercent(
+                appSettings.MonitorVolume * 100d);
+            settingsWindow.SetupBanner.Visibility = appSettings.SetupCompleted
+                ? Visibility.Collapsed
+                : Visibility.Visible;
 
             if (appSettings.WindowWidth is { } width)
             {
@@ -542,7 +510,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            await RefreshDevicesAsync();
+            await RestartAudioServiceAsync("manual troubleshooting restart");
         }
         catch (Exception exception)
         {
@@ -556,13 +524,6 @@ public partial class MainWindow : Window
         string? preferredRenderId = null,
         string? preferredMonitorId = null)
     {
-        if (audioEngine.State != AudioEngineState.Stopped)
-        {
-            ShowUiError(
-                "Stop the audio engine before refreshing devices.");
-            return;
-        }
-
         var selectedCaptureId = preferredCaptureId
             ?? (MicrophoneComboBox.SelectedItem as AudioEndpoint)?.DeviceId;
         var selectedRenderId = preferredRenderId
@@ -583,33 +544,62 @@ public partial class MainWindow : Window
                 audioDeviceService.GetActiveDevices);
             currentSnapshot = snapshot;
 
-            MicrophoneComboBox.ItemsSource = snapshot.CaptureEndpoints;
-            VirtualOutputComboBox.ItemsSource = snapshot.RenderEndpoints;
+            var physicalCaptureEndpoints =
+                AudioEndpointSelectionPolicy.PhysicalMicrophones(
+                    snapshot.CaptureEndpoints);
+            var virtualRenderEndpoints =
+                AudioEndpointSelectionPolicy.VirtualOutputs(
+                    snapshot.RenderEndpoints);
+            MicrophoneComboBox.ItemsSource = physicalCaptureEndpoints;
+            VirtualOutputComboBox.ItemsSource = virtualRenderEndpoints;
             var physicalRenderEndpoints = snapshot.RenderEndpoints
                 .Where(endpoint => !endpoint.IsLikelyVbCable)
                 .ToArray();
             MonitorOutputComboBox.ItemsSource = physicalRenderEndpoints;
 
             MicrophoneComboBox.SelectedItem =
-                FindById(snapshot.CaptureEndpoints, selectedCaptureId)
-                ?? snapshot.CaptureEndpoints.FirstOrDefault(
-                    endpoint => endpoint.IsDefault)
-                ?? snapshot.CaptureEndpoints.FirstOrDefault();
+                AudioEndpointSelectionPolicy.SelectMicrophone(
+                    physicalCaptureEndpoints,
+                    appSettings.UseDefaultMicrophone,
+                    selectedCaptureId);
+            var selectedMicrophone =
+                MicrophoneComboBox.SelectedItem as AudioEndpoint;
+            var pinnedMicrophoneUnavailable =
+                !appSettings.UseDefaultMicrophone
+                && !string.IsNullOrWhiteSpace(selectedCaptureId)
+                && !string.Equals(
+                    selectedMicrophone?.DeviceId,
+                    selectedCaptureId,
+                    StringComparison.Ordinal);
+            settingsWindow.MicrophoneSelectionStatusTextBlock.Text =
+                selectedMicrophone is null
+                    ? "No usable physical microphone is available. Soundboard will recover automatically when one appears."
+                    : pinnedMicrophoneUnavailable
+                        ? $"The pinned microphone is unavailable. Temporarily using {selectedMicrophone.FriendlyName}; the pinned device will be restored when it returns."
+                        : appSettings.UseDefaultMicrophone
+                            ? $"Following the Windows default communications microphone: {selectedMicrophone.FriendlyName}."
+                            : $"Pinned to {selectedMicrophone.FriendlyName}.";
 
-            var preferredVirtualCable = snapshot.RenderEndpoints
-                .FirstOrDefault(
-                    endpoint =>
-                        endpoint.IsLikelyVbCable
-                        && endpoint.FriendlyName.Contains(
-                            "CABLE Input",
-                            StringComparison.OrdinalIgnoreCase))
-                ?? snapshot.RenderEndpoints.FirstOrDefault(
-                    endpoint => endpoint.IsLikelyVbCable);
-
-            VirtualOutputComboBox.SelectedItem =
-                FindById(snapshot.RenderEndpoints, selectedRenderId)
-                ?? preferredVirtualCable
-                ?? snapshot.RenderEndpoints.FirstOrDefault();
+            var savedVirtualOutput =
+                AudioEndpointSelectionPolicy.SelectVirtualOutput(
+                virtualRenderEndpoints,
+                selectedRenderId);
+            var configuredVirtualOutputUnavailable =
+                !string.IsNullOrWhiteSpace(selectedRenderId)
+                && savedVirtualOutput is null;
+            VirtualOutputComboBox.SelectedItem = savedVirtualOutput
+                ?? (configuredVirtualOutputUnavailable
+                    ? null
+                    : AudioEndpointSelectionPolicy.SelectVirtualOutput(
+                        virtualRenderEndpoints,
+                        configuredEndpointId: null));
+            if (configuredVirtualOutputEndpointId is null
+                && VirtualOutputComboBox.SelectedItem
+                    is AudioEndpoint discoveredVirtualOutput)
+            {
+                configuredVirtualOutputEndpointId =
+                    discoveredVirtualOutput.DeviceId;
+            }
 
             var savedMonitor = FindById(
                 snapshot.RenderEndpoints,
@@ -637,7 +627,19 @@ public partial class MainWindow : Window
                     : string.Join(" | ", snapshot.Warnings);
             await UpdateSelectedFormatsAsync();
             UpdateRoutingStatusForSelection();
-            if (savedMonitorRejected)
+            if (configuredVirtualOutputUnavailable)
+            {
+                var warning =
+                    "The configured VB-CABLE render endpoint is unavailable. "
+                    + "Its saved endpoint ID was preserved; reconnect or "
+                    + "re-enable that endpoint, or explicitly select a "
+                    + "replacement in Settings.";
+                ErrorTextBlock.Text = warning;
+                StatusTextBlock.Text =
+                    "Waiting for the configured Soundboard microphone endpoint.";
+                lastDiagnosticMessage = warning;
+            }
+            else if (savedMonitorRejected)
             {
                 var warning =
                     $"The saved monitor endpoint \"{savedMonitor!.FriendlyName}\" "
@@ -654,8 +656,6 @@ public partial class MainWindow : Window
         {
             isApplyingSettings = false;
             isRefreshing = false;
-            UpdateSettingsFromUi();
-            ScheduleSettingsSave();
             UpdateControlAvailability();
             RefreshDiagnosticStatus();
         }
@@ -665,14 +665,43 @@ public partial class MainWindow : Window
         object sender,
         SelectionChangedEventArgs eventArgs)
     {
+        var programmaticSelection = isApplyingSettings || isRefreshing;
         try
         {
             await UpdateSelectedFormatsAsync();
             UpdateRoutingStatusForSelection();
-            UpdateSettingsFromUi();
-            ScheduleSettingsSave();
             UpdateControlAvailability();
             RefreshDiagnosticStatus();
+            if (!programmaticSelection)
+            {
+                if (ReferenceEquals(sender, MicrophoneComboBox)
+                    && UseDefaultMicrophoneCheckBox.IsChecked != true
+                    && MicrophoneComboBox.SelectedItem
+                        is AudioEndpoint selectedMicrophone)
+                {
+                    pinnedMicrophoneEndpointId =
+                        AudioEndpointSelectionPolicy
+                            .UpdateConfiguredEndpointId(
+                                pinnedMicrophoneEndpointId,
+                                selectedMicrophone,
+                                userInitiated: true);
+                }
+
+                if (ReferenceEquals(sender, VirtualOutputComboBox))
+                {
+                    configuredVirtualOutputEndpointId =
+                        AudioEndpointSelectionPolicy
+                            .UpdateConfiguredEndpointId(
+                                configuredVirtualOutputEndpointId,
+                                VirtualOutputComboBox.SelectedItem
+                                    as AudioEndpoint,
+                                userInitiated: true);
+                }
+
+                UpdateSettingsFromUi();
+                ScheduleSettingsSave();
+                await RestartAudioServiceAsync("device selection changed");
+            }
         }
         catch (Exception exception)
         {
@@ -739,119 +768,195 @@ public partial class MainWindow : Window
         UpdateRoutingExplanation();
     }
 
-    private async void StartEngineButton_Click(
-        object sender,
-        RoutedEventArgs eventArgs)
+    private async Task StartAudioServiceAsync(string reason)
     {
-        var microphone =
-            MicrophoneComboBox.SelectedItem as AudioEndpoint;
-        var render =
-            VirtualOutputComboBox.SelectedItem as AudioEndpoint;
-        var monitor =
-            MonitorOutputComboBox.SelectedItem as AudioEndpoint;
-        var monitoringEnabled =
-            MonitorSoundsCheckBox.IsChecked == true;
-
+        var microphone = MicrophoneComboBox.SelectedItem as AudioEndpoint;
+        var render = VirtualOutputComboBox.SelectedItem as AudioEndpoint;
         if (microphone is null || render is null)
         {
-            ShowUiError(
-                "Select a microphone and a VB-CABLE render endpoint first.");
+            StatusTextBlock.Text = microphone is null
+                ? "No usable physical microphone is available. Soundboard will connect automatically when one appears."
+                : "The Soundboard microphone is unavailable. Install or enable VB-CABLE, then Soundboard will reconnect automatically.";
+            lastDiagnosticMessage = $"Audio service waiting after {reason}.";
+            UpdateEnginePresentation();
             return;
         }
 
-        ErrorTextBlock.Text = string.Empty;
-        StatusTextBlock.Text = "Starting the audio engine…";
-        UpdateControlAvailability();
-
+        var monitor = MonitorOutputComboBox.SelectedItem as AudioEndpoint;
         try
         {
-            await Task.Run(
-                () => audioEngine.Start(
-                    microphone.DeviceId,
-                    render.DeviceId,
-                    new AudioMonitorConfiguration(
-                        monitoringEnabled,
-                        monitor?.DeviceId)));
-
-            var monitorDiagnostics = audioEngine.Diagnostics;
-            var monitorReady =
-                monitorDiagnostics?.MonitorInitializationStatus == "Ready";
-            StatusTextBlock.Text = monitorReady
-                ? "Audio engine is running. Microphone plus soundboard is "
-                    + $"going to {render.FriendlyName}; soundboard-only "
-                    + $"monitoring is going to "
-                    + $"{monitorDiagnostics!.MonitorFriendlyName}."
-                : "Audio engine is running and writing microphone plus "
-                    + $"soundboard to {render.FriendlyName}. "
-                    + (monitoringEnabled
-                        ? "Sound monitoring is unavailable; see the warning."
-                        : "Sound monitoring is disabled.");
-            lastDiagnosticMessage = monitorReady
-                ? "The virtual and sound-only monitor outputs started "
-                    + "successfully."
-                : monitorDiagnostics?.LastMonitorWarningOrError
-                    ?? "The virtual audio engine started successfully.";
-            RefreshDiagnosticStatus();
+            StatusTextBlock.Text = "Connecting microphone…";
+            await audioServiceLifecycle.ConnectAsync(
+                microphone.DeviceId,
+                render.DeviceId,
+                new AudioMonitorConfiguration(
+                    MonitorSoundsCheckBox.IsChecked == true,
+                    monitor?.DeviceId));
+            StatusTextBlock.Text =
+                $"Ready. {microphone.FriendlyName} is continuously mixed into the Soundboard microphone.";
+            lastDiagnosticMessage = $"Audio service started automatically after {reason}.";
         }
         catch (Exception exception)
         {
-            ShowUiError(exception.Message);
+            lastDiagnosticMessage = exception.Message;
+            ErrorTextBlock.Text =
+                "Audio is temporarily unavailable; Soundboard will retry after the next device change. "
+                + exception.Message;
         }
         finally
         {
+            UpdateEnginePresentation();
             UpdateControlAvailability();
+            RefreshDiagnosticStatus();
         }
     }
 
-    private async void StopEngineButton_Click(
+    private async Task RestartAudioServiceAsync(string reason)
+    {
+        var requestGeneration = Interlocked.Increment(
+            ref audioServiceRequestGeneration);
+        if (isClosing)
+        {
+            return;
+        }
+
+        await audioServiceGate.WaitAsync();
+        try
+        {
+            if (isClosing
+                || requestGeneration
+                    != Interlocked.Read(ref audioServiceRequestGeneration))
+            {
+                return;
+            }
+
+            await audioServiceLifecycle.StopAsync();
+
+            await RefreshDevicesAsync(
+                appSettings.MicrophoneEndpointId,
+                appSettings.VirtualOutputEndpointId,
+                appSettings.MonitorOutputEndpointId);
+            if (isClosing
+                || requestGeneration
+                    != Interlocked.Read(ref audioServiceRequestGeneration))
+            {
+                return;
+            }
+
+            await StartAudioServiceAsync(reason);
+        }
+        finally
+        {
+            audioServiceGate.Release();
+        }
+    }
+
+    private void AudioDeviceService_DevicesChanged(
+        object? sender,
+        AudioDeviceChangedEventArgs eventArgs)
+    {
+        if (isClosing)
+        {
+            return;
+        }
+
+        RunOnUiThread(() =>
+        {
+            deviceChangeDebounceCancellation?.Cancel();
+            deviceChangeDebounceCancellation?.Dispose();
+            deviceChangeDebounceCancellation = new CancellationTokenSource();
+            _ = ReconcileAfterDeviceChangeAsync(
+                eventArgs,
+                deviceChangeDebounceCancellation.Token);
+        });
+    }
+
+    private void SystemEvents_PowerModeChanged(
+        object sender,
+        PowerModeChangedEventArgs eventArgs)
+    {
+        if (eventArgs.Mode != PowerModes.Resume || isClosing)
+        {
+            return;
+        }
+
+        RunOnUiThread(
+            () => _ = RestartAudioServiceAsync("Windows resumed from sleep"));
+    }
+
+    private async Task ReconcileAfterDeviceChangeAsync(
+        AudioDeviceChangedEventArgs eventArgs,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            await RestartAudioServiceAsync(
+                $"Windows audio device {eventArgs.Kind.ToString().ToLowerInvariant()}");
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer endpoint event superseded this reconciliation.
+        }
+    }
+
+    private async void UseDefaultMicrophoneCheckBox_Changed(
         object sender,
         RoutedEventArgs eventArgs)
     {
-        StatusTextBlock.Text = "Stopping the audio engine…";
-        ErrorTextBlock.Text = string.Empty;
-        UpdateControlAvailability();
-
-        try
+        if (isApplyingSettings)
         {
-            await Task.Run(audioEngine.Stop);
-            StatusTextBlock.Text =
-                "Audio engine stopped. Audio devices were released.";
-            lastDiagnosticMessage =
-                "The audio engine stopped cleanly.";
-            RefreshDiagnosticStatus();
+            return;
         }
-        catch (Exception exception)
+
+        MicrophoneComboBox.IsEnabled =
+            UseDefaultMicrophoneCheckBox.IsChecked != true;
+        if (UseDefaultMicrophoneCheckBox.IsChecked != true
+            && MicrophoneComboBox.SelectedItem
+                is AudioEndpoint selectedMicrophone)
+        {
+            pinnedMicrophoneEndpointId = AudioEndpointSelectionPolicy
+                .UpdateConfiguredEndpointId(
+                    pinnedMicrophoneEndpointId,
+                    selectedMicrophone,
+                    userInitiated: true);
+        }
+
+        UpdateSettingsFromUi();
+        ScheduleSettingsSave();
+        await RestartAudioServiceAsync("microphone mode changed");
+    }
+
+    private void TestMicrophoneButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        settingsWindow.SettingsTabControl.SelectedIndex = 0;
+        var message = audioEngine.State == AudioEngineState.Running
+            ? "Speak now: the microphone meter should move. Voice is already being sent to the Soundboard microphone."
+            : "No microphone is connected yet. Soundboard will reconnect automatically when one becomes available.";
+        StatusTextBlock.Text = message;
+        settingsWindow.MicrophoneTestStatusTextBlock.Text = message;
+    }
+
+    private async void CompleteSetupButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (MicrophoneComboBox.SelectedItem is not AudioEndpoint
+            || VirtualOutputComboBox.SelectedItem is not AudioEndpoint)
         {
             ShowUiError(
-                $"The audio engine could not stop cleanly: "
-                + exception.Message);
+                "Connect a microphone and install/enable VB-CABLE before completing setup.");
+            return;
         }
-        finally
-        {
-            UpdateControlAvailability();
-        }
-    }
 
-    private void MicrophoneVolumeSlider_ValueChanged(
-        object sender,
-        RoutedPropertyChangedEventArgs<double> eventArgs)
-    {
-        var percent = (int)Math.Round(eventArgs.NewValue);
-        MicrophoneVolumeTextBlock.Text = $"{percent}%";
-        audioEngine.MicrophoneVolume = percent / 100f;
+        appSettings = appSettings with { SetupCompleted = true };
+        settingsWindow.SetupBanner.Visibility = Visibility.Collapsed;
         UpdateSettingsFromUi();
-        ScheduleSettingsSave();
-    }
-
-    private void MuteMicrophoneCheckBox_Changed(
-        object sender,
-        RoutedEventArgs eventArgs)
-    {
-        audioEngine.MicrophoneMuted =
-            MuteMicrophoneCheckBox.IsChecked == true;
-        UpdateEnginePresentation();
-        UpdateSettingsFromUi();
-        ScheduleSettingsSave();
+        await settingsStore.SaveAsync(appSettings);
+        await RestartAudioServiceAsync("setup completed");
+        settingsWindow.Hide();
     }
 
     private void SoundVolumeSlider_ValueChanged(
@@ -860,7 +965,7 @@ public partial class MainWindow : Window
     {
         var percent = (int)Math.Round(eventArgs.NewValue);
         SoundVolumeTextBlock.Text = $"{percent}%";
-        audioEngine.SoundVolume = percent / 100f;
+        audioEngine.SoundVolume = AudioGain.FromPercent(percent);
         UpdateSettingsFromUi();
         ScheduleSettingsSave();
     }
@@ -874,6 +979,10 @@ public partial class MainWindow : Window
         ScheduleSettingsSave();
         UpdateControlAvailability();
         RefreshDiagnosticStatus();
+        if (!isApplyingSettings)
+        {
+            _ = RestartAudioServiceAsync("monitoring setting changed");
+        }
     }
 
     private void MonitorVolumeSlider_ValueChanged(
@@ -882,77 +991,9 @@ public partial class MainWindow : Window
     {
         var percent = (int)Math.Round(eventArgs.NewValue);
         MonitorVolumeTextBlock.Text = $"{percent}%";
-        audioEngine.MonitorVolume = percent / 100f;
+        audioEngine.MonitorVolume = AudioGain.FromPercent(percent);
         UpdateSettingsFromUi();
         ScheduleSettingsSave();
-    }
-
-    private void NormalizationTargetSlider_ValueChanged(
-        object sender,
-        RoutedPropertyChangedEventArgs<double> eventArgs)
-    {
-        UpdateLoudnessAndLimiterPresentation();
-        UpdateSettingsFromUi();
-        ScheduleSettingsSave();
-    }
-
-    private void SafetyLimiterCheckBox_Changed(
-        object sender,
-        RoutedEventArgs eventArgs)
-    {
-        audioEngine.SafetyLimiterEnabled =
-            SafetyLimiterCheckBox.IsChecked == true;
-        UpdateLoudnessAndLimiterPresentation();
-        UpdateSettingsFromUi();
-        ScheduleSettingsSave();
-        RefreshDiagnosticStatus();
-    }
-
-    private void LimiterCeilingSlider_ValueChanged(
-        object sender,
-        RoutedPropertyChangedEventArgs<double> eventArgs)
-    {
-        var ceiling = Math.Round(eventArgs.NewValue, 1);
-        audioEngine.SafetyLimiterCeilingDbfs = ceiling;
-        UpdateLoudnessAndLimiterPresentation();
-        UpdateSettingsFromUi();
-        ScheduleSettingsSave();
-        RefreshDiagnosticStatus();
-    }
-
-    private void UpdateLoudnessAndLimiterPresentation()
-    {
-        if (NormalizationTargetTextBlock is null)
-        {
-            return;
-        }
-
-        NormalizationTargetTextBlock.Text =
-            $"{NormalizationTargetSlider.Value:N1} LUFS";
-        LimiterCeilingTextBlock.Text =
-            $"{LimiterCeilingSlider.Value:N1} dBFS";
-        var enabled = SafetyLimiterCheckBox.IsChecked == true;
-        var diagnostics = audioEngine.Diagnostics;
-        LimiterStatusTextBlock.Text = enabled
-            ? $"Enabled · "
-                + $"{(diagnostics?.SafetyLimiterLookahead
-                    ?? SamplePeakLimiter.DefaultLookahead)
-                    .TotalMilliseconds:N0} ms lookahead"
-            : "Disabled · output is bypassing safety limiting";
-        LimiterStatusTextBlock.Foreground = enabled
-            ? ThemeBrush("SuccessBrush")
-            : ThemeBrush("WarningBrush");
-        LimiterGainReductionTextBlock.Text =
-            "Current gain reduction — Virtual: "
-            + $"{diagnostics?.VirtualLimiterCurrentGainReductionDb ?? 0f:N1} dB"
-            + " · Monitor: "
-            + $"{diagnostics?.MonitorLimiterCurrentGainReductionDb ?? 0f:N1} dB";
-        settingsWindow.LimiterMaximumReductionTextBlock.Text =
-            "Maximum gain reduction — Virtual: "
-            + $"{diagnostics?.VirtualLimiterMaximumGainReductionDb ?? 0f:N1} dB"
-            + " · Monitor: "
-            + $"{diagnostics?.MonitorLimiterMaximumGainReductionDb ?? 0f:N1} dB";
-        UpdateStatusChips();
     }
 
     private void ImportSoundsButton_Click(
@@ -1102,25 +1143,27 @@ public partial class MainWindow : Window
             var engineState = audioEngine.State;
             if (engineState != AudioEngineState.Running)
             {
+                await RestartAudioServiceAsync("a sound was triggered while audio was unavailable");
+                engineState = audioEngine.State;
+            }
+
+            if (engineState != AudioEngineState.Running)
+            {
                 var message = engineState switch
                 {
                     AudioEngineState.Stopped =>
-                        "Hotkey ignored because the audio engine is stopped. "
-                        + "Start it manually in Soundboard.",
+                        "Sound request is waiting for a usable microphone and Soundboard microphone.",
                     AudioEngineState.Starting =>
-                        "Sound request ignored while the audio engine is starting.",
+                        "Sound request could not play while audio was connecting.",
                     AudioEngineState.Stopping =>
-                        "Sound request ignored while the audio engine is stopping.",
+                        "Sound request could not play while audio was reconnecting.",
                     AudioEngineState.Faulted =>
-                        "Sound request ignored because the audio engine is faulted.",
+                        "Sound request could not play because audio is temporarily unavailable.",
                     _ =>
-                        $"Sound request ignored while the audio engine is "
+                        $"Sound request could not play while audio is "
                         + $"{engineState}."
                 };
-                StatusTextBlock.Text = source == SoundTriggerSource.Mouse
-                    ? "Start the audio engine before playing a sound. "
-                        + "Sound tiles never start audio routing automatically."
-                    : message;
+                StatusTextBlock.Text = message;
                 lastDiagnosticMessage = message;
                 RefreshDiagnosticStatus();
                 return;
@@ -1154,60 +1197,7 @@ public partial class MainWindow : Window
                     return;
                 }
 
-                var normalizationGainDb = 0d;
                 ErrorTextBlock.Text = string.Empty;
-                if (tile.Sound.NormalizeLoudness)
-                {
-                    var key = LoudnessAnalysisKey.Create(
-                        tile.Sound.ContentHash,
-                        tile.Sound.ClipSettings);
-                    var result = tile.MatchingLoudnessAnalysis;
-                    if (result is null)
-                    {
-                        StatusTextBlock.Text =
-                            $"Analyzing loudness for \"{tile.DisplayName}\"…";
-                        var outcome =
-                            await loudnessAnalysisService.GetOrAnalyzeAsync(
-                                key,
-                                managedPath,
-                                tile.Sound.ClipSettings);
-                        tile.SetLoudnessAnalysis(key, outcome.Result);
-                        result = outcome.Result;
-                        if (outcome.Warning is not null)
-                        {
-                            ErrorTextBlock.Text = outcome.Warning;
-                        }
-                    }
-
-                    if (!result.IsValid)
-                    {
-                        var message =
-                            $"\"{tile.DisplayName}\" could not be played with "
-                            + "normalization enabled: "
-                            + (result.InvalidReason
-                                ?? "loudness analysis is invalid.");
-                        ErrorTextBlock.Text = message;
-                        StatusTextBlock.Text =
-                            "The requested sound was not played. The "
-                            + "microphone engine remains active.";
-                        lastDiagnosticMessage = message;
-                        return;
-                    }
-
-                    var calculation = LoudnessNormalization.Calculate(
-                        result,
-                        appSettings.NormalizationTargetLufs);
-                    normalizationGainDb = calculation.AppliedGainDb;
-                    if (calculation.WasClamped)
-                    {
-                        ErrorTextBlock.Text =
-                            $"Normalization for \"{tile.DisplayName}\" was "
-                            + $"clamped from "
-                            + $"{calculation.RequestedGainDb:+0.0;-0.0;0.0} dB "
-                            + $"to "
-                            + $"{calculation.AppliedGainDb:+0.0;-0.0;0.0} dB.";
-                    }
-                }
 
                 if (requestGeneration
                         != Interlocked.Read(ref soundTriggerRequestGeneration)
@@ -1221,7 +1211,7 @@ public partial class MainWindow : Window
                         tile.Id,
                         managedPath,
                         tile.Sound.ClipSettings,
-                        normalizationGainDb));
+                        tile.Sound.VolumePercent));
 
                 if (audioEngine.CurrentSoundId == tile.Id)
                 {
@@ -1700,7 +1690,8 @@ public partial class MainWindow : Window
                     dialog.SoundName,
                     dialog.CategoryId,
                     dialog.IsFavorite,
-                    dialog.TileAccent));
+                    dialog.TileAccent,
+                    dialog.VolumePercent));
             tile.ReplaceSound(
                 updated,
                 GetCategoryName(updated.CategoryId));
@@ -1753,7 +1744,8 @@ public partial class MainWindow : Window
                     tile.DisplayName,
                     tile.Sound.CategoryId,
                     !tile.IsFavorite,
-                    tile.Sound.TileAccent));
+                    tile.Sound.TileAccent,
+                    tile.Sound.VolumePercent));
             tile.ReplaceSound(
                 updated,
                 GetCategoryName(updated.CategoryId));
@@ -1793,12 +1785,9 @@ public partial class MainWindow : Window
             soundLibraryStore.GetManagedFilePath(tile.Sound),
             waveformCacheService,
             previewService,
-            loudnessAnalysisService,
             previewEndpoint,
             previewAvailabilityMessage,
-            appSettings.NormalizationTargetLufs,
-            appSettings.SafetyLimiterEnabled,
-            appSettings.SafetyLimiterCeilingDbfs)
+            appSettings.SoundVolume * 100d)
         {
             Owner = this
         };
@@ -1830,12 +1819,6 @@ public partial class MainWindow : Window
             tile.ReplaceSound(
                 updated,
                 GetCategoryName(updated.CategoryId));
-            if (dialog.SavedAnalysisOutcome is { } savedAnalysis)
-            {
-                tile.SetLoudnessAnalysis(
-                    savedAnalysis.Key,
-                    savedAnalysis.Result);
-            }
             ErrorTextBlock.Text = string.Empty;
             StatusTextBlock.Text =
                 $"Saved non-destructive clip settings for "
@@ -2486,7 +2469,14 @@ public partial class MainWindow : Window
     private void UpdateEnginePresentation()
     {
         var state = audioEngine.State;
-        EngineStateTextBlock.Text = state.ToString();
+        EngineStateTextBlock.Text = state switch
+        {
+            AudioEngineState.Running => "Ready",
+            AudioEngineState.Starting => "Connecting",
+            AudioEngineState.Stopping => "Reconnecting",
+            AudioEngineState.Faulted => "Unavailable",
+            _ => "Waiting"
+        };
         var (glyphKey, brushKey) = state switch
         {
             AudioEngineState.Running =>
@@ -2508,25 +2498,18 @@ public partial class MainWindow : Window
             _ => ThemeBrush("BorderStrongBrush")
         };
 
-        var micMuted = MuteMicrophoneCheckBox.IsChecked == true;
         MicrophoneStateTextBlock.Text = state switch
         {
-            AudioEngineState.Running when micMuted =>
-                "Microphone muted",
             AudioEngineState.Running => "Microphone live",
             AudioEngineState.Faulted => "Microphone released",
             _ => "Microphone idle"
         };
-        MicrophoneStateTextBlock.Foreground = micMuted
-            && state == AudioEngineState.Running
-                ? ThemeBrush("WarningBrush")
-                : ThemeBrush("TextMutedBrush");
+        MicrophoneStateTextBlock.Foreground = ThemeBrush("TextMutedBrush");
     }
 
     /// <summary>
     /// Keeps the compact bottom-bar chips current: monitoring state, the
-    /// most recent global-hotkey action, and limiter activity, which only
-    /// appears while the limiter is actually reducing gain.
+    /// most recent global-hotkey action.
     /// </summary>
     private void UpdateStatusChips()
     {
@@ -2541,20 +2524,6 @@ public partial class MainWindow : Window
 
         HotkeyActionTextBlock.Text = $"Hotkey: {lastHotkeyAction}";
 
-        var diagnostics = audioEngine.Diagnostics;
-        var reduction = Math.Max(
-            diagnostics?.VirtualLimiterCurrentGainReductionDb ?? 0f,
-            diagnostics?.MonitorLimiterCurrentGainReductionDb ?? 0f);
-        if (appSettings.SafetyLimiterEnabled && reduction >= 0.1f)
-        {
-            LimiterActivityTextBlock.Text =
-                $"Limiting {reduction:N1} dB";
-            LimiterActivityChip.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            LimiterActivityChip.Visibility = Visibility.Collapsed;
-        }
     }
 
     private void AudioEngine_ErrorOccurred(
@@ -2570,8 +2539,7 @@ public partial class MainWindow : Window
                 if (!eventArgs.IsRecoverable)
                 {
                     StatusTextBlock.Text =
-                        "The audio engine encountered a device or stream "
-                        + "error.";
+                        "Audio is temporarily unavailable. Soundboard will reconnect when the device is ready.";
                 }
 
                 UpdateMonitorStatusForSelection();
@@ -2586,19 +2554,18 @@ public partial class MainWindow : Window
         RunOnUiThread(
             () =>
             {
-                MicrophonePeakProgressBar.Value =
-                    Math.Clamp(eventArgs.MicrophonePeak, 0f, 1f);
-                OutputPeakProgressBar.Value =
-                    Math.Clamp(eventArgs.MixedOutputPeak, 0f, 1f);
+                var microphonePeak = SanitizePeak(eventArgs.MicrophonePeak);
+                var mixedOutputPeak = SanitizePeak(eventArgs.MixedOutputPeak);
+                var monitorOutputPeak = SanitizePeak(eventArgs.MonitorOutputPeak);
+                MicrophonePeakProgressBar.Value = microphonePeak;
+                OutputPeakProgressBar.Value = mixedOutputPeak;
                 MicrophonePeakTextBlock.Text =
-                    $"{eventArgs.MicrophonePeak:P0}";
+                    $"{microphonePeak:P0}";
                 OutputPeakTextBlock.Text =
-                    $"{eventArgs.MixedOutputPeak:P0}";
-                MonitorPeakProgressBar.Value =
-                    Math.Clamp(eventArgs.MonitorOutputPeak, 0f, 1f);
+                    $"{mixedOutputPeak:P0}";
+                MonitorPeakProgressBar.Value = monitorOutputPeak;
                 MonitorPeakTextBlock.Text =
-                    $"{eventArgs.MonitorOutputPeak:P0}";
-                UpdateLoudnessAndLimiterPresentation();
+                    $"{monitorOutputPeak:P0}";
             });
     }
 
@@ -2629,22 +2596,40 @@ public partial class MainWindow : Window
                     var finishedName =
                         FindTile(eventArgs.SoundId)?.DisplayName
                         ?? "Sound";
-                    currentSoundId = null;
-                    SetPlayingTile(null);
-                    CurrentSoundTextBlock.Text = "No sound playing";
+                    var remainingSoundId = audioEngine.CurrentSoundId;
+                    if (remainingSoundId is { } remainingId)
+                    {
+                        currentSoundId = remainingId;
+                        currentSoundSessionId =
+                            audioEngine.Diagnostics?.CurrentPlaybackSessionId
+                            ?? currentSoundSessionId;
+                        SetPlayingTile(remainingId);
+                        var remainingName = FindTile(remainingId)?.DisplayName
+                            ?? remainingId.ToString();
+                        CurrentSoundTextBlock.Text =
+                            $"Playing {remainingName} · one-shot";
+                    }
+                    else
+                    {
+                        currentSoundId = null;
+                        SetPlayingTile(null);
+                        CurrentSoundTextBlock.Text = "No sound playing";
+                    }
 
                     if (audioEngine.State == AudioEngineState.Running)
                     {
-                        StatusTextBlock.Text = eventArgs.Reason switch
-                        {
-                            SoundPlaybackChangeReason.Completed =>
-                                $"{finishedName} finished naturally. The "
-                                + "microphone remains active.",
-                            SoundPlaybackChangeReason.Stopped =>
-                                "Sound playback stopped. The microphone "
-                                + "remains active.",
-                            _ => StatusTextBlock.Text
-                        };
+                        StatusTextBlock.Text = remainingSoundId is not null
+                            ? $"{finishedName} ended; other triggered sounds are still playing."
+                            : eventArgs.Reason switch
+                            {
+                                SoundPlaybackChangeReason.Completed =>
+                                    $"{finishedName} finished naturally. The "
+                                    + "microphone remains active.",
+                                SoundPlaybackChangeReason.Stopped =>
+                                    "Sound playback stopped. The microphone "
+                                    + "remains active.",
+                                _ => StatusTextBlock.Text
+                            };
                     }
                 }
 
@@ -2839,34 +2824,18 @@ public partial class MainWindow : Window
     private void UpdateControlAvailability()
     {
         var state = audioEngine.State;
-        var selectorsCanChange =
-            state == AudioEngineState.Stopped && !isRefreshing;
-        var selectedMicrophone =
-            MicrophoneComboBox.SelectedItem as AudioEndpoint;
-        var selectedRender =
-            VirtualOutputComboBox.SelectedItem as AudioEndpoint;
-        var relatedVbCapture = currentSnapshot?.CaptureEndpoints
-            .Any(endpoint => endpoint.IsLikelyVbCable) == true;
+        var selectorsCanChange = !isRefreshing
+            && state is not (AudioEngineState.Starting or AudioEngineState.Stopping);
 
-        MicrophoneComboBox.IsEnabled = selectorsCanChange;
+        MicrophoneComboBox.IsEnabled = selectorsCanChange
+            && UseDefaultMicrophoneCheckBox.IsChecked != true;
         VirtualOutputComboBox.IsEnabled = selectorsCanChange;
         MonitorSoundsCheckBox.IsEnabled = selectorsCanChange;
         MonitorOutputComboBox.IsEnabled = selectorsCanChange;
-        RefreshDevicesButton.IsEnabled = selectorsCanChange;
-        StartEngineButton.IsEnabled =
-            selectorsCanChange
-            && selectedMicrophone is not null
-            && selectedRender?.IsLikelyVbCable == true
-            && relatedVbCapture;
-        StopEngineButton.IsEnabled =
-            state is AudioEngineState.Starting
-                or AudioEngineState.Running
-                or AudioEngineState.Faulted;
+        RefreshDevicesButton.IsEnabled = !isRefreshing;
 
         var volumeControlsEnabled =
             state is AudioEngineState.Stopped or AudioEngineState.Running;
-        MicrophoneVolumeSlider.IsEnabled = volumeControlsEnabled;
-        MuteMicrophoneCheckBox.IsEnabled = volumeControlsEnabled;
         SoundVolumeSlider.IsEnabled = volumeControlsEnabled;
         MonitorVolumeSlider.IsEnabled = volumeControlsEnabled;
         ImportSoundsButton.IsEnabled =
@@ -3232,8 +3201,7 @@ public partial class MainWindow : Window
 
         MonitorStatusTextBlock.Text =
             $"Ready to monitor soundboard audio only through "
-            + $"{monitor.FriendlyName}. The engine will not restart "
-            + "automatically.";
+            + $"{monitor.FriendlyName}. Changes reconnect automatically.";
         MonitorStatusTextBlock.Foreground = ThemeBrush("SuccessBrush");
     }
 
@@ -3279,12 +3247,11 @@ public partial class MainWindow : Window
                 + $"{YesNo(MonitorSoundsCheckBox.IsChecked == true)}",
             $"Global hotkeys enabled: "
                 + $"{YesNo(appSettings.GlobalHotkeysEnabled)}",
-            $"Normalization target: "
-                + $"{appSettings.NormalizationTargetLufs:N1} LUFS",
-            $"Safety limiter enabled: "
-                + $"{YesNo(appSettings.SafetyLimiterEnabled)}",
-            $"Safety limiter ceiling: "
-                + $"{appSettings.SafetyLimiterCeilingDbfs:N1} dBFS",
+            $"Microphone selection mode: "
+                + (appSettings.UseDefaultMicrophone
+                    ? "Windows default communications microphone"
+                    : "Pinned endpoint"),
+            $"Sound master gain: {AudioGain.FromPercent(appSettings.SoundVolume * 100d):P0}",
             $"Assigned sound hotkeys: "
                 + $"{soundTiles.Count(tile => tile.Sound.Hotkey is not null)}",
             $"Registered sound hotkeys: "
@@ -3365,29 +3332,11 @@ public partial class MainWindow : Window
                 $"- Microphone buffer capacity: "
                 + $"{engineDiagnostics.MicrophoneBufferCapacity.TotalMilliseconds:N0} ms");
             lines.Add(
-                $"- Safety limiter: "
-                + $"{(engineDiagnostics.SafetyLimiterEnabled
-                    ? "Enabled"
-                    : "Disabled")}");
+                $"- Active sound sessions: {engineDiagnostics.ActiveSoundCount}");
             lines.Add(
-                $"- Limiter ceiling: "
-                + $"{engineDiagnostics.SafetyLimiterCeilingDbfs:N1} dBFS");
+                $"- Final-boundary clipped samples: {engineDiagnostics.ClippedSampleCount}");
             lines.Add(
-                $"- Limiter lookahead: "
-                + $"{engineDiagnostics.SafetyLimiterLookahead.TotalMilliseconds:N1} ms");
-            lines.Add(
-                $"- Virtual limiter gain reduction current/max: "
-                + $"{engineDiagnostics.VirtualLimiterCurrentGainReductionDb:N1}"
-                + "/"
-                + $"{engineDiagnostics.VirtualLimiterMaximumGainReductionDb:N1} dB");
-            lines.Add(
-                $"- Monitor limiter gain reduction current/max: "
-                + $"{engineDiagnostics.MonitorLimiterCurrentGainReductionDb:N1}"
-                + "/"
-                + $"{engineDiagnostics.MonitorLimiterMaximumGainReductionDb:N1} dB");
-            lines.Add(
-                $"- Limiter non-finite samples rejected: "
-                + $"{engineDiagnostics.LimiterNonFiniteSampleCount}");
+                $"- Final-boundary non-finite samples rejected: {engineDiagnostics.NonFiniteSampleCount}");
             lines.Add(
                 $"- Monitoring enabled for engine session: "
                 + $"{YesNo(engineDiagnostics.MonitoringEnabled)}");
@@ -3432,11 +3381,10 @@ public partial class MainWindow : Window
             $"- Microphone buffer overflows: "
             + $"{audioEngine.MicrophoneBufferOverflowCount}");
         lines.Add(
-            $"- Preview limiter gain reduction current/max: "
-            + $"{previewService.CurrentGainReductionDb:N1}/"
-            + $"{previewService.MaximumGainReductionDb:N1} dB");
+            $"- Preview final-boundary clipped samples: "
+            + $"{previewService.ClippedSampleCount}");
         lines.Add(
-            $"- Preview limiter non-finite samples rejected: "
+            $"- Preview final-boundary non-finite samples rejected: "
             + $"{previewService.NonFiniteSampleCount}");
         lines.Add($"- Last error/diagnostic: {lastDiagnosticMessage}");
 
@@ -3512,10 +3460,10 @@ public partial class MainWindow : Window
             : RestoreBounds;
         appSettings = appSettings with
         {
-            MicrophoneEndpointId =
-                (MicrophoneComboBox.SelectedItem as AudioEndpoint)?.DeviceId,
-            VirtualOutputEndpointId =
-                (VirtualOutputComboBox.SelectedItem as AudioEndpoint)?.DeviceId,
+            UseDefaultMicrophone =
+                UseDefaultMicrophoneCheckBox.IsChecked == true,
+            MicrophoneEndpointId = pinnedMicrophoneEndpointId,
+            VirtualOutputEndpointId = configuredVirtualOutputEndpointId,
             MonitoringEnabled =
                 MonitorSoundsCheckBox.IsChecked == true,
             MonitorOutputEndpointId =
@@ -3523,15 +3471,6 @@ public partial class MainWindow : Window
             MonitorVolume = MonitorVolumeSlider.Value / 100d,
             GlobalHotkeysEnabled =
                 GlobalHotkeysCheckBox.IsChecked == true,
-            NormalizationTargetLufs =
-                NormalizationTargetSlider.Value,
-            SafetyLimiterEnabled =
-                SafetyLimiterCheckBox.IsChecked == true,
-            SafetyLimiterCeilingDbfs =
-                Math.Round(LimiterCeilingSlider.Value, 1),
-            MicrophoneVolume = MicrophoneVolumeSlider.Value / 100d,
-            MicrophoneMuted =
-                MuteMicrophoneCheckBox.IsChecked == true,
             SoundVolume = SoundVolumeSlider.Value / 100d,
             WindowLeft = double.IsFinite(bounds.Left)
                 ? bounds.Left
@@ -3627,19 +3566,13 @@ public partial class MainWindow : Window
         settingsSaveDelayCancellation?.Cancel();
         settingsSaveDelayCancellation?.Dispose();
         settingsSaveDelayCancellation = null;
+        deviceChangeDebounceCancellation?.Cancel();
+        deviceChangeDebounceCancellation?.Dispose();
+        deviceChangeDebounceCancellation = null;
+        SystemEvents.PowerModeChanged -= SystemEvents_PowerModeChanged;
+        audioDeviceService.DevicesChanged -= AudioDeviceService_DevicesChanged;
 
         var shutdownErrors = new List<string>();
-
-        try
-        {
-            await loudnessAnalysisService.DisposeAsync();
-        }
-        catch (Exception exception)
-        {
-            shutdownErrors.Add(
-                "Loudness analysis could not be stopped cleanly: "
-                + exception.Message);
-        }
 
         try
         {
@@ -3706,7 +3639,16 @@ public partial class MainWindow : Window
 
         try
         {
-            await Task.Run(audioEngine.Dispose);
+            await audioServiceGate.WaitAsync();
+            try
+            {
+                await audioServiceLifecycle.StopAsync();
+                await Task.Run(audioEngine.Dispose);
+            }
+            finally
+            {
+                audioServiceGate.Release();
+            }
         }
         catch (Exception exception)
         {
@@ -3720,10 +3662,12 @@ public partial class MainWindow : Window
         audioEngine.PeakLevelsChanged -= AudioEngine_PeakLevelsChanged;
         audioEngine.SoundPlaybackStateChanged -=
             AudioEngine_SoundPlaybackStateChanged;
+        audioDeviceService.Dispose();
         await soundLibraryStore.DisposeAsync();
         await settingsStore.DisposeAsync();
         libraryActionGate.Dispose();
         soundTriggerGate.Dispose();
+        audioServiceGate.Dispose();
 
         if (shutdownErrors.Count > 0)
         {
@@ -3837,6 +3781,9 @@ public partial class MainWindow : Window
     }
 
     private static string YesNo(bool value) => value ? "Yes" : "No";
+
+    private static float SanitizePeak(float value) =>
+        float.IsFinite(value) ? Math.Clamp(value, 0f, 1f) : 0f;
 
     private static string YesNoOrNotActive(bool? value)
     {

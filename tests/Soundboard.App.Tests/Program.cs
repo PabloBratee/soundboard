@@ -5,6 +5,7 @@ using Concentus.Enums;
 using Concentus.Oggfile;
 using Concentus.Structs;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 using Soundboard.App.Hotkeys;
 using Soundboard.App.Lifetime;
 using Soundboard.App.Presentation;
@@ -25,12 +26,14 @@ internal static class Program
     {
         var testRoot = Path.Combine(
             Path.GetTempPath(),
-            $"Soundboard-Milestone9-Tests-{Guid.NewGuid():N}");
+            $"Soundboard-Tests-{Guid.NewGuid():N}");
 
         try
         {
             Directory.CreateDirectory(testRoot);
             RunSingleInstanceTests();
+            RunEndpointSelectionTests();
+            await RunAutomaticAudioServiceLifecycleTestsAsync();
             await RunMigrationAndOrganizationTestsAsync(
                 Path.Combine(testRoot, "organization"));
             await RunImportAndSearchTestsAsync(
@@ -50,13 +53,12 @@ internal static class Program
             await RunWaveformTestsAsync(
                 Path.Combine(testRoot, "waveforms"));
             RunPreviewSafetyTests();
-            await RunLoudnessAndLimiterTestsAsync(
-                Path.Combine(testRoot, "loudness-limiter"));
-            await RunVersionFiveAndSettingsMigrationTestsAsync(
-                Path.Combine(testRoot, "v5-settings"));
+            RunGainAndBoundaryTests();
+            await RunVersionOneSettingsAndVolumeMigrationTestsAsync(
+                Path.Combine(testRoot, "settings-volume-migration"));
             await RunOptionalLocalFormatTestsAsync(
                 Path.Combine(testRoot, "local-formats"));
-            Console.WriteLine("All Milestone 9 tests passed.");
+            Console.WriteLine("All Soundboard tests passed.");
             return 0;
         }
         catch (Exception exception)
@@ -96,6 +98,206 @@ internal static class Program
 
         Console.WriteLine(
             "PASS single-instance acquisition, rejection, and release");
+    }
+
+    private static void RunEndpointSelectionTests()
+    {
+        var defaultMicrophone = new AudioEndpoint(
+            "default-mic",
+            "Default microphone",
+            AudioDeviceDirection.Capture,
+            AudioEndpointState.Active,
+            IsDefault: true,
+            IsLikelyVbCable: false);
+        var pinnedMicrophone = new AudioEndpoint(
+            "pinned-mic",
+            "Pinned microphone",
+            AudioDeviceDirection.Capture,
+            AudioEndpointState.Active,
+            IsDefault: false,
+            IsLikelyVbCable: false);
+        var virtualMicrophone = new AudioEndpoint(
+            "cable-capture",
+            "CABLE Output (VB-Audio Virtual Cable)",
+            AudioDeviceDirection.Capture,
+            AudioEndpointState.Active,
+            IsDefault: false,
+            IsLikelyVbCable: true);
+        var standardVirtualRender = new AudioEndpoint(
+            "standard-cable-render",
+            "Renamed playback endpoint",
+            AudioDeviceDirection.Render,
+            AudioEndpointState.Active,
+            IsDefault: false,
+            IsLikelyVbCable: true,
+            InterfaceFriendlyName: "VB-Audio Virtual Cable",
+            EndpointDescription: "CABLE Input");
+        var alternateVirtualRender = new AudioEndpoint(
+            "alternate-cable-render",
+            "CABLE In 16ch (VB-Audio Virtual Cable)",
+            AudioDeviceDirection.Render,
+            AudioEndpointState.Active,
+            IsDefault: false,
+            IsLikelyVbCable: true,
+            InterfaceFriendlyName: "VB-Audio Virtual Cable",
+            EndpointDescription: "CABLE In 16ch");
+
+        var physical = AudioEndpointSelectionPolicy.PhysicalMicrophones(
+            [defaultMicrophone, pinnedMicrophone, virtualMicrophone]);
+        AssertSequence(
+            [defaultMicrophone, pinnedMicrophone],
+            physical,
+            "virtual output is excluded from physical microphone choices");
+        AssertEqual(
+            defaultMicrophone,
+            AudioEndpointSelectionPolicy.SelectMicrophone(
+                physical,
+                useWindowsDefault: true,
+                pinnedEndpointId: "pinned-mic"),
+            "Windows-default mode follows the communications default");
+        AssertEqual(
+            pinnedMicrophone,
+            AudioEndpointSelectionPolicy.SelectMicrophone(
+                physical,
+                useWindowsDefault: false,
+                pinnedEndpointId: "pinned-mic"),
+            "pinned endpoint is remembered");
+        AssertEqual(
+            defaultMicrophone,
+            AudioEndpointSelectionPolicy.SelectMicrophone(
+                [defaultMicrophone],
+                useWindowsDefault: false,
+                pinnedEndpointId: "pinned-mic"),
+            "missing pinned endpoint falls back to current default");
+        AssertEqual(
+            pinnedMicrophone,
+            AudioEndpointSelectionPolicy.SelectMicrophone(
+                physical,
+                useWindowsDefault: false,
+                pinnedEndpointId: "pinned-mic"),
+            "returned pinned endpoint is selected again");
+
+        var changedDefault = new[]
+        {
+            defaultMicrophone with { IsDefault = false },
+            pinnedMicrophone with { IsDefault = true }
+        };
+        AssertEqual(
+            pinnedMicrophone with { IsDefault = true },
+            AudioEndpointSelectionPolicy.SelectMicrophone(
+                changedDefault,
+                useWindowsDefault: true,
+                pinnedEndpointId: null),
+            "default-device change is followed");
+        AssertTrue(
+            AudioDeviceService.IsLikelyVbCableDevice(
+                "Localized endpoint name",
+                "VB-Audio Virtual Cable",
+                "Localized endpoint description",
+                @"{2}.\\?\root#media#0000#...\vbaudiovacwdm2022_out1"),
+            "driver interface metadata identifies a renamed VB-CABLE endpoint");
+        AssertTrue(
+            !AudioDeviceService.IsLikelyVbCableDevice(
+                "Cable microphone (Acme USB Audio)",
+                "Acme USB Audio",
+                "Microphone",
+                @"{2}.\\?\usb#vid_0001&pid_0002"),
+            "an unrelated physical microphone containing cable is retained");
+        AssertEqual(
+            standardVirtualRender,
+            AudioEndpointSelectionPolicy.SelectVirtualOutput(
+                [alternateVirtualRender, standardVirtualRender],
+                configuredEndpointId: null),
+            "standard cable render is selected from endpoint metadata");
+        AssertEqual(
+            alternateVirtualRender,
+            AudioEndpointSelectionPolicy.SelectVirtualOutput(
+                [standardVirtualRender, alternateVirtualRender],
+                "alternate-cable-render"),
+            "saved virtual endpoint ID remains authoritative");
+        AssertEqual(
+            null,
+            AudioEndpointSelectionPolicy.SelectVirtualOutput(
+                [standardVirtualRender, alternateVirtualRender],
+                "missing-saved-render"),
+            "a missing saved virtual endpoint does not silently fall back");
+        AssertEqual(
+            "pinned-mic",
+            AudioEndpointSelectionPolicy.UpdateConfiguredEndpointId(
+                "pinned-mic",
+                defaultMicrophone,
+                userInitiated: false),
+            "temporary microphone fallback does not overwrite the pinned ID");
+        AssertEqual(
+            "missing-saved-render",
+            AudioEndpointSelectionPolicy.UpdateConfiguredEndpointId(
+                "missing-saved-render",
+                selectedEndpoint: null,
+                userInitiated: false),
+            "missing virtual output does not erase its configured ID");
+        AssertEqual(
+            "default-mic",
+            AudioEndpointSelectionPolicy.UpdateConfiguredEndpointId(
+                "pinned-mic",
+                defaultMicrophone,
+                userInitiated: true),
+            "an explicit microphone choice replaces the pinned ID");
+        AssertEqual(
+            "alternate-cable-render",
+            AudioEndpointSelectionPolicy.UpdateConfiguredEndpointId(
+                "missing-saved-render",
+                alternateVirtualRender,
+                userInitiated: true),
+            "an explicit virtual-output choice replaces the missing ID");
+
+        Console.WriteLine(
+            "PASS metadata-backed physical/virtual separation, pinned IDs, "
+            + "default mode, device fallback/restoration, renamed/duplicate "
+            + "VB-CABLE endpoints, and missing-output recovery");
+    }
+
+    private static async Task RunAutomaticAudioServiceLifecycleTestsAsync()
+    {
+        var state = AudioEngineState.Stopped;
+        var startCount = 0;
+        var stopCount = 0;
+        var lifecycle = new AudioServiceLifecycle(
+            () => state,
+            (microphoneId, renderId, monitor) =>
+            {
+                AssertEqual("physical", microphoneId, "startup microphone endpoint");
+                AssertEqual("cable", renderId, "startup virtual endpoint");
+                startCount++;
+                state = AudioEngineState.Running;
+            },
+            () =>
+            {
+                stopCount++;
+                state = AudioEngineState.Stopped;
+            });
+
+        await lifecycle.ConnectAsync(
+            "physical",
+            "cable",
+            new AudioMonitorConfiguration(false, null));
+        AssertEqual(1, startCount, "audio service starts automatically when connected");
+        AssertEqual(AudioEngineState.Running, state, "audio service remains running");
+
+        await lifecycle.ConnectAsync(
+            "physical",
+            "cable",
+            new AudioMonitorConfiguration(false, null));
+        AssertEqual(1, stopCount, "reconnect releases the previous session first");
+        AssertEqual(2, startCount, "reconnect creates one replacement session");
+
+        await lifecycle.StopAsync();
+        AssertEqual(2, stopCount, "shutdown releases the active audio session");
+        AssertEqual(AudioEngineState.Stopped, state, "shutdown leaves audio stopped");
+        await lifecycle.StopAsync();
+        AssertEqual(2, stopCount, "repeated cleanup does not duplicate stop calls");
+
+        Console.WriteLine(
+            "PASS automatic audio-service startup, single-session reconnect, and idempotent shutdown cleanup");
     }
 
     private static async Task RunMigrationAndOrganizationTestsAsync(
@@ -180,11 +382,11 @@ internal static class Program
                    await File.ReadAllTextAsync(store.LibraryFilePath)))
         {
             AssertEqual(
-                6,
+                7,
                 migratedJson.RootElement
                     .GetProperty("schemaVersion")
                     .GetInt32(),
-                "schema persisted as v6");
+                "schema persisted as v7");
         }
 
         var categoryOne = await store.CreateCategoryAsync("  Effects  ");
@@ -200,7 +402,8 @@ internal static class Program
                 "Alpha",
                 categoryTwo.Id,
                 false,
-                SoundTileAccent.Default));
+                SoundTileAccent.Default,
+                100d));
         AssertEqual(
             categoryTwo.Id,
             temporarilyCategorized.CategoryId,
@@ -211,7 +414,8 @@ internal static class Program
                 "Alpha",
                 null,
                 false,
-                SoundTileAccent.Default));
+                SoundTileAccent.Default,
+                100d));
         AssertEqual(
             null,
             movedBack.CategoryId,
@@ -238,14 +442,16 @@ internal static class Program
                 "Bravo edited",
                 categoryOne.Id,
                 true,
-                SoundTileAccent.Purple));
+                SoundTileAccent.Purple,
+                100d));
         await store.UpdateSoundAsync(
             soundC,
             new SoundMetadataUpdate(
                 "Charlie",
                 categoryOne.Id,
                 false,
-                SoundTileAccent.Teal));
+                SoundTileAccent.Teal,
+                100d));
 
         var categoryReorder = await store.ReorderSoundsAsync(
             [soundC, soundB],
@@ -290,7 +496,8 @@ internal static class Program
                 "Bravo playing",
                 categoryOne.Id,
                 true,
-                SoundTileAccent.Red));
+                SoundTileAccent.Red,
+                100d));
         playingTile.ReplaceSound(editedPlayingSound, "Reactions");
         AssertTrue(playingTile.IsPlaying, "playing state survives edit");
         AssertEqual(soundB, playingTile.Id, "playing stable ID survives edit");
@@ -412,7 +619,8 @@ internal static class Program
                 "Crowd Cheer",
                 category.Id,
                 true,
-                SoundTileAccent.Green));
+                SoundTileAccent.Green,
+                100d));
         AssertTrue(
             SoundLibraryFilter.MatchesSearch(
                 categorized,
@@ -688,7 +896,8 @@ internal static class Program
                     opusSound.DisplayName,
                     category.Id,
                     true,
-                    SoundTileAccent.Purple));
+                    SoundTileAccent.Purple,
+                    100d));
             var hotkey = new HotkeyGesture(
                 0x47,
                 HotkeyModifiers.Control,
@@ -720,7 +929,7 @@ internal static class Program
         Console.WriteLine(
             "PASS Ogg Opus, Ogg Vorbis, .opus, mono/stereo, one-shot EOS, "
             + "invalid/corrupt/multichannel rejection, duplicate detection, "
-            + "schema v6 format persistence, and personalization");
+            + "schema v7 format persistence, and personalization");
     }
 
     private static async Task RunOptionalLocalFormatTestsAsync(string root)
@@ -892,9 +1101,9 @@ internal static class Program
                        Path.Combine(root, "library.json"))))
         {
             AssertEqual(
-                6,
+                7,
                 persisted.RootElement.GetProperty("schemaVersion").GetInt32(),
-                "v4 migrated to schema v6");
+                "v4 migrated to schema v7");
         }
 
         await using (var reloadedStore = new SoundLibraryStore(root))
@@ -907,41 +1116,10 @@ internal static class Program
             var cachePath = new WaveformCacheService(root)
                 .GetCacheFilePath(hash, 200);
             AssertTrue(File.Exists(cachePath), "waveform cache exists before remove");
-            string analysisCachePath;
-            var libraryBeforeAnalysis = await File.ReadAllTextAsync(
-                reloadedStore.LibraryFilePath);
-            await using (var analysisService =
-                         new LoudnessAnalysisService(root))
-            {
-                var analysisKey = LoudnessAnalysisKey.Create(
-                    reloaded.ContentHash,
-                    reloaded.ClipSettings);
-                var analysis = await analysisService.GetOrAnalyzeAsync(
-                    analysisKey,
-                    managedPath,
-                    reloaded.ClipSettings);
-                AssertTrue(
-                    analysis.Result.IsValid,
-                    "edited sound analysis valid before removal");
-                analysisCachePath =
-                    analysisService.GetCacheFilePath(analysisKey);
-            }
-
-            AssertEqual(
-                libraryBeforeAnalysis,
-                await File.ReadAllTextAsync(
-                    reloadedStore.LibraryFilePath),
-                "analysis generation does not rewrite library JSON");
-            AssertTrue(
-                File.Exists(analysisCachePath),
-                "analysis cache exists before remove");
             var removeWarnings = await reloadedStore.RemoveAsync(soundId);
             AssertEqual(0, removeWarnings.Count, "waveform removal warnings");
             AssertTrue(!File.Exists(managedPath), "managed copy removed");
             AssertTrue(!File.Exists(cachePath), "waveform cache removed");
-            AssertTrue(
-                !File.Exists(analysisCachePath),
-                "analysis cache removed");
         }
 
         var invalidRoot = Path.Combine(root, "invalid");
@@ -1233,379 +1411,213 @@ internal static class Program
             + "rejects VB-CABLE and capture endpoints");
     }
 
-    private static async Task RunLoudnessAndLimiterTestsAsync(string root)
+    private static void RunGainAndBoundaryTests()
     {
-        Directory.CreateDirectory(root);
-        const int sampleRate = 48000;
-        var analyzer = new LoudnessAnalyzer();
-        var quietMono = CreateSineSamples(
-            sampleRate, 1, 1.2, 0.1f);
-        var loudMono = CreateSineSamples(
-            sampleRate, 1, 1.2, 0.2f);
-        var stereo = CreateSineSamples(
-            sampleRate, 2, 1.2, 0.1f);
-        var quietResult = analyzer.AnalyzeEffectiveClip(
-            new TestSampleProvider(quietMono, sampleRate, 1),
-            TimeSpan.FromSeconds(1.2));
-        var loudResult = analyzer.AnalyzeEffectiveClip(
-            new TestSampleProvider(loudMono, sampleRate, 1),
-            TimeSpan.FromSeconds(1.2));
-        var stereoResult = analyzer.AnalyzeEffectiveClip(
-            new TestSampleProvider(stereo, sampleRate, 2),
-            TimeSpan.FromSeconds(1.2));
-        AssertTrue(quietResult.IsValid, "mono sine loudness is valid");
-        AssertTrue(stereoResult.IsValid, "stereo sine loudness is valid");
+        AssertEqual(0f, AudioGain.FromPercent(0d), "zero percent is digital silence");
         AssertTrue(
-            loudResult.IntegratedLoudnessLufs
-                > quietResult.IntegratedLoudnessLufs,
-            "louder sine measures louder");
+            Math.Abs(AudioGain.FromPercent(50d) - 0.25f) < 0.000001f,
+            "fifty percent uses the documented squared taper");
+        AssertTrue(
+            Math.Abs(AudioGain.FromPercent(25d) - 0.0625f) < 0.000001f,
+            "twenty-five percent uses the documented squared taper");
+        AssertTrue(
+            Math.Abs(AudioGain.FromPercent(75d) - 0.5625f) < 0.000001f,
+            "seventy-five percent uses the documented squared taper");
+        AssertEqual(1f, AudioGain.FromPercent(100d), "one hundred percent is unity");
+        var previousGain = -1f;
+        for (var percent = 0; percent <= 100; percent++)
+        {
+            var gain = AudioGain.FromPercent(percent);
+            AssertTrue(gain >= previousGain, "volume curve remains monotonic");
+            AssertTrue(gain is >= 0f and <= 1f, "volume curve remains bounded by unity");
+            previousGain = gain;
+        }
+        AssertTrue(
+            Math.Abs(AudioGain.Combine(50d, 50d) - 0.0625f) < 0.000001f,
+            "per-sound and master gain are each applied exactly once");
+        AssertThrows<ArgumentOutOfRangeException>(
+            () => AudioGain.FromPercent(-1d),
+            "negative sound gain is rejected");
+        using (var engine = new AudioMixEngine())
+        {
+            AssertThrows<ArgumentOutOfRangeException>(
+                () => engine.SoundVolume = 1.01f,
+                "sound master cannot exceed unity gain");
+            AssertThrows<ArgumentOutOfRangeException>(
+                () => engine.SoundVolume = float.NaN,
+                "non-finite sound master gain is rejected");
+        }
+
+        var smoothGain = new SmoothGainSampleProvider(
+            new TestSampleProvider(
+                Enumerable.Repeat(1f, 20).ToArray(),
+                1000,
+                1),
+            initialGain: 1f);
+        AssertSequence(
+            [1f],
+            ReadSamples(smoothGain, 1),
+            "initial gain is applied without an unintended fade-in");
+        smoothGain.SetGain(0f);
+        var rampDown = ReadSamples(smoothGain, 5);
+        AssertTrue(
+            rampDown.Zip(rampDown.Skip(1), (left, right) => left >= right).All(value => value),
+            "live gain changes ramp monotonically without a discontinuous sample jump");
+        AssertTrue(
+            rampDown.Zip(rampDown.Skip(1), (left, right) => left - right)
+                .All(step => step <= 0.200001f),
+            "five-millisecond live gain ramp bounds adjacent-sample steps");
+        AssertTrue(
+            Math.Abs(rampDown[^1]) < 0.000001f,
+            "live gain ramp reaches exact digital silence");
+        smoothGain.SetGain(1f);
+        var rampUp = ReadSamples(smoothGain, 5);
+        AssertTrue(
+            Math.Abs(rampUp[^1] - 1f) < 0.000001f,
+            "live gain ramp reaches exact unity");
+
+        var validSamples = new[] { -1f, -0.5f, 0f, 0.5f, 1f };
+        var transparent = new SampleBoundarySanitizer(
+            new TestSampleProvider(validSamples, 48000, 1));
+        AssertSequence(
+            validSamples,
+            ReadAllSamples(transparent),
+            "final boundary leaves valid samples unchanged");
+        AssertEqual(0L, transparent.ClippedSampleCount, "valid samples are not clipped");
+
+        var invalid = new SampleBoundarySanitizer(
+            new TestSampleProvider(
+                [-2f, -1f, float.NaN, float.PositiveInfinity, 0.25f, 1f, 2f],
+                48000,
+                1));
+        AssertSequence(
+            [-1f, -1f, 0f, 0f, 0.25f, 1f, 1f],
+            ReadAllSamples(invalid),
+            "final boundary only clips invalid values");
+        AssertEqual(2L, invalid.ClippedSampleCount, "over-range sample count");
+        AssertEqual(2L, invalid.NonFiniteSampleCount, "non-finite sample count");
+
+        var sound = new VolumeSampleProvider(
+            new TestSampleProvider([0.8f], 48000, 1))
+        {
+            Volume = AudioGain.Combine(50d, 100d)
+        };
+        AssertTrue(
+            Math.Abs(ReadAllSamples(sound).Single() - 0.2f) < 0.000001f,
+            "known PCM amplitude follows per-sound and master gain");
+
+        var microphone = new TestSampleProvider([0.25f], 48000, 1);
+        var mutedSound = new VolumeSampleProvider(
+            new TestSampleProvider([0.75f], 48000, 1))
+        {
+            Volume = AudioGain.FromPercent(0d)
+        };
+        var mix = new MixingSampleProvider(
+            new ISampleProvider[] { microphone, mutedSound });
+        AssertTrue(
+            Math.Abs(ReadAllSamples(mix).Single() - 0.25f) < 0.000001f,
+            "zero sound master leaves microphone passthrough unchanged");
+
+        var fixture = Enumerable.Range(0, 100)
+            .Select(index => index == 0 ? 0.8f : 0.1f)
+            .ToArray();
+        var decoderFactory = new TestDecoderFactory(fixture, 1000, 1);
+        var clipSettings = AudioClipSettings.FullDuration(
+            TimeSpan.FromMilliseconds(100));
+        using var firstSession = new SoundPlaybackSession(
+            Guid.NewGuid(),
+            1,
+            "fixture.wav",
+            clipSettings,
+            decoderFactory,
+            WaveFormat.CreateIeeeFloatWaveFormat(1000, 1),
+            volumePercent: 50d,
+            masterGain: AudioGain.FromPercent(100d),
+            monitorGain: 1f);
+        var partial = new float[10];
+        AssertEqual(
+            10,
+            firstSession.VirtualBranch.Read(partial, 0, partial.Length),
+            "first trigger begins playback");
+        AssertTrue(
+            Math.Abs(partial[0] - 0.2f) < 0.000001f,
+            "broadcast branch applies the configured sound gain");
         AssertTrue(
             Math.Abs(
-                loudResult.IntegratedLoudnessLufs
-                - quietResult.IntegratedLoudnessLufs
-                - 6.0206d) < 0.35d,
-            "6 dB amplitude change measures approximately 6 LU");
-        Console.WriteLine(
-            $"INFO deterministic loudness fixtures: quiet "
-            + $"{quietResult.IntegratedLoudnessLufs:N2} LUFS, loud "
-            + $"{loudResult.IntegratedLoudnessLufs:N2} LUFS, stereo "
-            + $"{stereoResult.IntegratedLoudnessLufs:N2} LUFS");
+                firstSession.MonitorBranchGain
+                - AudioGain.Combine(50d, 100d)) < 0.000001f,
+            "preview/monitor and broadcast use the same sound gain before explicit monitor volume");
 
-        var silence = analyzer.AnalyzeEffectiveClip(
-            new TestSampleProvider(
-                new float[sampleRate],
-                sampleRate,
-                1),
-            TimeSpan.FromSeconds(1));
-        AssertTrue(!silence.IsValid, "digital silence is non-normalizable");
+        using var restartedSession = new SoundPlaybackSession(
+            firstSession.SoundId,
+            2,
+            "fixture.wav",
+            clipSettings,
+            decoderFactory,
+            WaveFormat.CreateIeeeFloatWaveFormat(1000, 1),
+            volumePercent: 50d,
+            masterGain: AudioGain.FromPercent(100d),
+            monitorGain: 1f);
+        var restarted = ReadAllSamples(restartedSession.VirtualBranch);
+        AssertEqual(100, restarted.Length, "re-triggered session plays exactly once");
         AssertTrue(
-            silence.HasFiniteValues,
-            "invalid analysis retains finite values");
-
-        var changing = new float[sampleRate * 2];
-        Array.Copy(
-            CreateSineSamples(sampleRate, 1, 1, 0.03f),
-            changing,
-            sampleRate);
-        Array.Copy(
-            CreateSineSamples(sampleRate, 1, 1, 0.3f),
+            Math.Abs(restarted[0] - 0.2f) < 0.000001f,
+            "re-trigger starts again at the first sample");
+        AssertEqual(
             0,
-            changing,
-            sampleRate,
-            sampleRate);
-        var sourceDuration = TimeSpan.FromSeconds(2);
-        var firstHalf = AudioClipSettings.Create(
-            sourceDuration, 0, 1000, 0, 0);
-        var secondHalf = AudioClipSettings.Create(
-            sourceDuration, 1000, null, 0, 0);
-        var fadedSecondHalf = AudioClipSettings.Create(
-            sourceDuration, 1000, null, 500, 0);
-        var firstResult = AnalyzeEdited(
-            analyzer, changing, sampleRate, firstHalf);
-        var secondResult = AnalyzeEdited(
-            analyzer, changing, sampleRate, secondHalf);
-        var fadedResult = AnalyzeEdited(
-            analyzer, changing, sampleRate, fadedSecondHalf);
-        AssertTrue(
-            secondResult.IntegratedLoudnessLufs
-                > firstResult.IntegratedLoudnessLufs + 10d,
-            "trim changes analysis input");
-        AssertTrue(
-            fadedResult.IntegratedLoudnessLufs
-                < secondResult.IntegratedLoudnessLufs,
-            "fade changes analysis input");
+            restartedSession.VirtualBranch.Read(new float[8], 0, 8),
+            "sound does not loop or replay after end-of-stream");
 
-        var boost = LoudnessNormalization.Calculate(
-            ValidAnalysis(-30d),
-            -16d);
-        var cut = LoudnessNormalization.Calculate(
-            ValidAnalysis(10d),
-            -16d);
-        AssertEqual(12d, boost.AppliedGainDb, "+12 dB boost clamp");
-        AssertEqual(-24d, cut.AppliedGainDb, "-24 dB cut clamp");
-        AssertTrue(boost.WasClamped, "boost clamp warning state");
-        AssertTrue(cut.WasClamped, "attenuation clamp warning state");
-        AssertTrue(
-            !LoudnessNormalization.Calculate(silence, -16d).IsAvailable,
-            "invalid analysis never produces gain");
-
-        var formatRoot = Path.Combine(root, "formats");
-        Directory.CreateDirectory(formatRoot);
-        var formatWave = Path.Combine(formatRoot, "tone.wav");
-        var formatMp3 = Path.Combine(formatRoot, "tone.mp3");
-        var formatOpus = Path.Combine(formatRoot, "tone.ogg");
-        var formatOpusExtension = Path.Combine(formatRoot, "tone.opus");
-        var formatVorbis = Path.Combine(formatRoot, "tone-vorbis.ogg");
-        WriteSineWaveFile(formatWave, sampleRate, seconds: 1);
-        using (var waveReader = new WaveFileReader(formatWave))
-        {
-            MediaFoundationEncoder.EncodeToMp3(
-                waveReader,
-                formatMp3,
-                desiredBitRate: 128000);
-        }
-
-        WriteTestOpus(formatOpus, channels: 1, frameCount: sampleRate);
-        WriteTestOpus(
-            formatOpusExtension,
-            channels: 2,
-            frameCount: sampleRate);
-        File.Copy(
-            Path.Combine(
-                AppContext.BaseDirectory,
-                "Fixtures",
-                "tiny-vorbis.ogg"),
-            formatVorbis);
-        foreach (var (path, label) in new[]
-                 {
-                     (formatWave, "WAV"),
-                     (formatMp3, "MP3"),
-                     (formatOpus, "Ogg Opus"),
-                     (formatOpusExtension, ".opus"),
-                     (formatVorbis, "Ogg Vorbis")
-                 })
-        {
-            using var decoded =
-                AudioFileDecoderFactory.Default.Open(path);
-            LoudnessAnalysisResult result;
-            if (label == "Ogg Vorbis"
-                && decoded.Duration < TimeSpan.FromMilliseconds(400))
+        using var concurrentSession = new SoundPlaybackSession(
+            Guid.NewGuid(),
+            3,
+            "fixture.wav",
+            clipSettings,
+            decoderFactory,
+            WaveFormat.CreateIeeeFloatWaveFormat(1000, 1),
+            volumePercent: 100d,
+            masterGain: AudioGain.FromPercent(100d),
+            monitorGain: 1f);
+        using var secondConcurrentSession = new SoundPlaybackSession(
+            Guid.NewGuid(),
+            4,
+            "fixture.wav",
+            clipSettings,
+            decoderFactory,
+            WaveFormat.CreateIeeeFloatWaveFormat(1000, 1),
+            volumePercent: 100d,
+            masterGain: AudioGain.FromPercent(100d),
+            monitorGain: 1f);
+        var concurrentMix = new MixingSampleProvider(
+            new ISampleProvider[]
             {
-                var decodedSamples = ReadAllSamples(decoded.SampleProvider);
-                var repetitions = (int)Math.Ceiling(
-                    sampleRate / (double)decodedSamples.Length);
-                var repeated = Enumerable.Range(0, repetitions)
-                    .SelectMany(_ => decodedSamples)
-                    .Take(sampleRate)
-                    .ToArray();
-                result = analyzer.AnalyzeEffectiveClip(
-                    new TestSampleProvider(repeated, sampleRate, 1),
-                    TimeSpan.FromSeconds(1));
-            }
-            else
-            {
-                var settings =
-                    AudioClipSettings.FullDuration(decoded.Duration);
-                result = analyzer.AnalyzeFile(path, settings);
-            }
+                concurrentSession.VirtualBranch,
+                secondConcurrentSession.VirtualBranch
+            });
+        var concurrentOutput = ReadAllSamples(concurrentMix);
+        AssertEqual(100, concurrentOutput.Length, "simultaneous sounds share one bounded mix");
+        AssertTrue(
+            Math.Abs(concurrentOutput[0] - 1.6f) < 0.000001f,
+            "different sounds mix concurrently before final clipping");
 
-            AssertTrue(result.IsValid, $"{label} loudness analysis");
-        }
-
-        var wavePath = Path.Combine(root, "analysis.wav");
-        WriteEditingWave(wavePath, channels: 1);
-        var contentHash = await GetFileHashAsync(wavePath);
-        var fullSettings = AudioClipSettings.FullDuration(
-            TimeSpan.FromSeconds(1));
-        var key = LoudnessAnalysisKey.Create(contentHash, fullSettings);
-        await using (var service = new LoudnessAnalysisService(root))
-        {
-            var requests = Enumerable.Range(0, 6)
-                .Select(
-                    _ => service.GetOrAnalyzeAsync(
-                        key,
-                        wavePath,
-                        fullSettings))
-                .ToArray();
-            var outcomes = await Task.WhenAll(requests);
-            AssertTrue(
-                outcomes.All(outcome => outcome.Result.IsValid),
-                "concurrent analysis results are valid");
-            AssertEqual(
-                1L,
-                service.AnalysisExecutionCount,
-                "identical analysis requests deduplicate");
-            AssertTrue(
-                (await service.TryLoadCachedAsync(key))?.LoadedFromCache
-                    == true,
-                "analysis cache round trip");
-
-            await File.WriteAllTextAsync(
-                service.GetCacheFilePath(key),
-                "{ corrupt");
-            var regenerated = await service.GetOrAnalyzeAsync(
-                key,
-                wavePath,
-                fullSettings);
-            AssertTrue(
-                regenerated.Result.IsValid,
-                "corrupt cache is regenerated");
-            AssertTrue(
-                regenerated.Warning?.Contains(
-                    "corrupt",
-                    StringComparison.OrdinalIgnoreCase) == true,
-                "corrupt cache warning surfaced");
-            AssertEqual(
-                2L,
-                service.AnalysisExecutionCount,
-                "corrupt cache caused one regeneration");
-
-            var trimmedKey = LoudnessAnalysisKey.Create(
-                contentHash,
-                AudioClipSettings.Create(
-                    TimeSpan.FromSeconds(1),
-                    100,
-                    null,
-                    0,
-                    0));
-            AssertTrue(key != trimmedKey, "trim changes analysis key");
-        }
-
-        RunLimiterTests(sampleRate);
         Console.WriteLine(
-            "PASS loudness mono/stereo, gating, trim/fade sensitivity, "
-            + "gain clamps, cache regeneration/deduplication, and limiter");
+            "PASS squared volume curve, exact silence/unity, bounded live ramps, "
+            + "single-application gain, microphone independence, concurrent "
+            + "one-shots, restart, no-loop EOS, and transparent final-boundary clipping");
     }
-
-    private static LoudnessAnalysisResult AnalyzeEdited(
-        LoudnessAnalyzer analyzer,
-        float[] source,
-        int sampleRate,
-        AudioClipSettings settings)
-    {
-        return analyzer.AnalyzeEffectiveClip(
-            new AudioClipSampleProvider(
-                new TestSampleProvider(source, sampleRate, 1),
-                settings),
-            settings.EffectiveDuration);
-    }
-
-    private static LoudnessAnalysisResult ValidAnalysis(double lufs)
-    {
-        return new LoudnessAnalysisResult(
-            lufs,
-            -1d,
-            1d,
-            LoudnessAnalyzer.AlgorithmVersion,
-            true,
-            null);
-    }
-
-    private static void RunLimiterTests(int sampleRate)
-    {
-        var below = CreateSineSamples(sampleRate, 1, 0.2, 0.2f);
-        var belowLimiter = new SamplePeakLimiter(
-            new TestSampleProvider(below, sampleRate, 1));
-        var belowOutput = ReadAllSamples(belowLimiter);
-        AssertEqual(below.Length, belowOutput.Length, "limiter mono EOS");
-        var maximumDifference = below.Zip(belowOutput)
-            .Max(pair => Math.Abs(pair.First - pair.Second));
-        AssertTrue(
-            maximumDifference < 0.00001f,
-            $"below-ceiling signal is unchanged ({maximumDifference})");
-
-        var hotStereo = Enumerable.Repeat(
-            1f,
-            sampleRate / 5 * 2).ToArray();
-        var limiter = new SamplePeakLimiter(
-            new TestSampleProvider(hotStereo, sampleRate, 2));
-        var hotOutput = ReadAllSamples(limiter);
-        var ceiling = (float)Math.Pow(10d, -1d / 20d);
-        AssertEqual(hotStereo.Length, hotOutput.Length, "limiter stereo EOS");
-        AssertTrue(
-            hotOutput.All(float.IsFinite),
-            "continuous maximum input remains finite");
-        AssertTrue(
-            hotOutput.Max(Math.Abs) <= ceiling + 0.00001f,
-            "output stays below sample-peak ceiling");
-        AssertTrue(
-            limiter.MaximumGainReductionDb > 0.9f,
-            "above-ceiling signal reports gain reduction");
-        AssertEqual(
-            SamplePeakLimiter.DefaultLookahead,
-            limiter.AddedLatency,
-            "reported limiter latency");
-        Console.WriteLine(
-            $"INFO limiter fixture: ceiling -1.0 dBFS, max reduction "
-            + $"{limiter.MaximumGainReductionDb:N2} dB, latency "
-            + $"{limiter.AddedLatency.TotalMilliseconds:N1} ms");
-
-        var bypassInput = CreateSineSamples(sampleRate, 1, 0.05, 1f);
-        var bypass = new SamplePeakLimiter(
-            new TestSampleProvider(bypassInput, sampleRate, 1),
-            enabled: false);
-        AssertSequence(
-            bypassInput,
-            ReadAllSamples(bypass),
-            "disabled limiter bypass");
-        bypass.CeilingDbfs = -3d;
-        AssertTrue(
-            Math.Abs(bypass.CeilingDbfs + 3d) < 0.0001d,
-            "ceiling update is safe");
-
-        var nonFinite = new SamplePeakLimiter(
-            new TestSampleProvider(
-                [float.NaN, float.PositiveInfinity, 0.5f],
-                sampleRate,
-                1));
-        AssertTrue(
-            ReadAllSamples(nonFinite).All(float.IsFinite),
-            "non-finite input is rejected");
-        AssertEqual(
-            2L,
-            nonFinite.NonFiniteSampleCount,
-            "non-finite diagnostic count");
-
-        var releaseInput = Enumerable.Repeat(1f, sampleRate / 20)
-            .Concat(Enumerable.Repeat(0.1f, sampleRate / 2))
-            .ToArray();
-        var releaseLimiter = new SamplePeakLimiter(
-            new TestSampleProvider(releaseInput, sampleRate, 1));
-        _ = ReadAllSamples(releaseLimiter);
-        AssertTrue(
-            releaseLimiter.MaximumGainReductionDb
-                > releaseLimiter.CurrentGainReductionDb,
-            "limiter release recovers smoothly toward unity");
-
-        var toggleInput = CreateSineSamples(
-            sampleRate,
-            1,
-            0.1,
-            1f);
-        var toggleLimiter = new SamplePeakLimiter(
-            new TestSampleProvider(toggleInput, sampleRate, 1));
-        var firstToggleBuffer = new float[500];
-        var firstToggleRead = toggleLimiter.Read(
-            firstToggleBuffer,
-            0,
-            firstToggleBuffer.Length);
-        toggleLimiter.Enabled = false;
-        var remainingToggleOutput = ReadAllSamples(toggleLimiter);
-        AssertEqual(
-            toggleInput.Length,
-            firstToggleRead + remainingToggleOutput.Length,
-            "runtime limiter bypass preserves bounded queued audio");
-
-        var repeatingLimiter = new SamplePeakLimiter(
-            new RepeatingSampleProvider(sampleRate, channels: 2, 0.2f));
-        var allocationBuffer = new float[2048];
-        _ = repeatingLimiter.Read(
-            allocationBuffer,
-            0,
-            allocationBuffer.Length);
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 50; index++)
-        {
-            _ = repeatingLimiter.Read(
-                allocationBuffer,
-                0,
-                allocationBuffer.Length);
-        }
-
-        var allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
-        AssertEqual(
-            0L,
-            allocatedAfter - allocatedBefore,
-            "limiter steady-state Read allocation");
-    }
-
-    private static async Task RunVersionFiveAndSettingsMigrationTestsAsync(
+    private static async Task RunVersionOneSettingsAndVolumeMigrationTestsAsync(
         string root)
     {
         var libraryRoot = Path.Combine(root, "library");
         var soundsPath = Path.Combine(libraryRoot, "Sounds");
         Directory.CreateDirectory(soundsPath);
         var soundId = Guid.NewGuid();
+        var categoryId = Guid.NewGuid();
+        var importedAt = DateTimeOffset.Parse("2026-01-02T03:04:05Z");
+        var hotkey = new HotkeyGesture(
+            0x42,
+            HotkeyModifiers.Control | HotkeyModifiers.Shift,
+            "Ctrl + Shift + B");
         var managedFileName = $"{soundId:N}.wav";
         var managedPath = Path.Combine(soundsPath, managedFileName);
         WriteEditingWave(managedPath, channels: 1);
@@ -1614,165 +1626,258 @@ internal static class Program
             Path.Combine(libraryRoot, "library.json"),
             new
             {
-                SchemaVersion = 5,
-                Categories = Array.Empty<object>(),
+                SchemaVersion = 6,
+                Categories = new[]
+                {
+                    new SoundCategory(
+                        categoryId,
+                        "Legacy category",
+                        0,
+                        importedAt)
+                },
                 Sounds = new[]
                 {
                     new
                     {
                         Id = soundId,
-                        DisplayName = "Schema five",
+                        DisplayName = "Existing sound",
                         ManagedFileName = managedFileName,
                         OriginalFileName = "source.wav",
                         FileType = "WAV",
                         Duration = TimeSpan.FromSeconds(1),
-                        ImportedAtUtc = DateTimeOffset.UtcNow,
+                        ImportedAtUtc = importedAt,
                         SortOrder = 0,
                         ContentHash = hash,
+                        Hotkey = hotkey,
+                        CategoryId = categoryId,
+                        IsFavorite = true,
+                        TileAccent = SoundTileAccent.Blue,
                         Container = AudioContainerType.Wav,
                         Codec = AudioCodecType.Pcm,
-                        OriginalExtension = ".wav"
+                        OriginalExtension = ".wav",
+                        TrimStartMilliseconds = 100,
+                        TrimEndMilliseconds = 800,
+                        FadeInMilliseconds = 50,
+                        FadeOutMilliseconds = 75,
+                        NormalizeLoudness = true
                     }
                 }
             });
+
+        await using (var store = new SoundLibraryStore(libraryRoot))
+        {
+            var migrated = await store.LoadAsync();
+            var sound = migrated.Sounds.Single();
+            AssertEqual(soundId, sound.Id, "existing sound ID preserved");
+            AssertEqual(hash, sound.ContentHash, "existing managed file preserved");
+            AssertEqual(100d, sound.VolumePercent, "existing sound gets unity volume");
+            AssertEqual(hotkey, sound.Hotkey, "existing hotkey is preserved");
+            AssertEqual(categoryId, sound.CategoryId, "existing category assignment is preserved");
+            AssertTrue(sound.IsFavorite, "existing favorite is preserved");
+            AssertEqual(SoundTileAccent.Blue, sound.TileAccent, "existing tile accent is preserved");
+            AssertEqual(0, sound.SortOrder, "existing page order is preserved");
+            AssertEqual(importedAt, sound.ImportedAtUtc, "existing import timestamp is preserved");
+            AssertEqual(100, sound.TrimStartMilliseconds, "existing trim start is preserved");
+            AssertEqual(800, sound.TrimEndMilliseconds, "existing trim end is preserved");
+            AssertEqual(50, sound.FadeInMilliseconds, "existing fade-in is preserved");
+            AssertEqual(75, sound.FadeOutMilliseconds, "existing fade-out is preserved");
+            AssertTrue(File.Exists(managedPath), "migration does not delete user audio");
+            AssertTrue(
+                migrated.Warnings.Any(
+                    warning => warning.Contains(
+                        "schema version 6",
+                        StringComparison.OrdinalIgnoreCase)),
+                "schema migration is reported");
+
+        }
+
+        var migratedLibraryHash = await GetFileHashAsync(
+            Path.Combine(libraryRoot, "library.json"));
+        var migratedLibraryWriteTime = File.GetLastWriteTimeUtc(
+            Path.Combine(libraryRoot, "library.json"));
+        var managedHashAfterMigration = await GetFileHashAsync(managedPath);
+        await using (var store = new SoundLibraryStore(libraryRoot))
+        {
+            var reloaded = (await store.LoadAsync()).Sounds.Single();
+            AssertEqual(100d, reloaded.VolumePercent, "second launch reads migrated volume");
+        }
+        AssertEqual(
+            migratedLibraryHash,
+            await GetFileHashAsync(Path.Combine(libraryRoot, "library.json")),
+            "second launch does not rewrite migrated library metadata");
+        AssertEqual(
+            migratedLibraryWriteTime,
+            File.GetLastWriteTimeUtc(Path.Combine(libraryRoot, "library.json")),
+            "second launch preserves migrated library timestamp");
+        AssertEqual(
+            managedHashAfterMigration,
+            await GetFileHashAsync(managedPath),
+            "managed audio fingerprint is unchanged by migration and reload");
+
         await using (var store = new SoundLibraryStore(libraryRoot))
         {
             var sound = (await store.LoadAsync()).Sounds.Single();
-            AssertTrue(
-                !sound.NormalizeLoudness,
-                "schema v5 defaults normalization disabled");
-            AssertEqual(soundId, sound.Id, "schema v5 ID preserved");
-            AssertEqual(hash, sound.ContentHash, "schema v5 hash preserved");
+            var updated = await store.UpdateSoundAsync(
+                soundId,
+                new SoundMetadataUpdate(
+                    sound.DisplayName,
+                    sound.CategoryId,
+                    sound.IsFavorite,
+                    sound.TileAccent,
+                    37d));
+            AssertEqual(37d, updated.VolumePercent, "per-sound volume updates");
         }
-        using (var migratedJson = JsonDocument.Parse(
+
+        await using (var store = new SoundLibraryStore(libraryRoot))
+        {
+            var reloaded = (await store.LoadAsync()).Sounds.Single();
+            AssertEqual(37d, reloaded.VolumePercent, "per-sound volume persists");
+        }
+
+        using (var libraryJson = JsonDocument.Parse(
                    await File.ReadAllTextAsync(
                        Path.Combine(libraryRoot, "library.json"))))
         {
             AssertEqual(
-                6,
-                migratedJson.RootElement
-                    .GetProperty("schemaVersion")
-                    .GetInt32(),
-                "schema v5 migrates to v6");
-        }
-
-        var invalidRoot = Path.Combine(root, "invalid-normalization");
-        var invalidSoundsPath = Path.Combine(invalidRoot, "Sounds");
-        Directory.CreateDirectory(invalidSoundsPath);
-        File.Copy(
-            managedPath,
-            Path.Combine(invalidSoundsPath, managedFileName));
-        await WriteJsonAsync(
-            Path.Combine(invalidRoot, "library.json"),
-            new
-            {
-                SchemaVersion = 6,
-                Categories = Array.Empty<object>(),
-                Sounds = new[]
-                {
-                    new
-                    {
-                        Id = soundId,
-                        DisplayName = "Invalid normalization",
-                        ManagedFileName = managedFileName,
-                        OriginalFileName = "source.wav",
-                        FileType = "WAV",
-                        Duration = TimeSpan.FromSeconds(1),
-                        ImportedAtUtc = DateTimeOffset.UtcNow,
-                        SortOrder = 0,
-                        ContentHash = hash,
-                        Container = AudioContainerType.Wav,
-                        Codec = AudioCodecType.Pcm,
-                        OriginalExtension = ".wav",
-                        NormalizeLoudness = "invalid"
-                    }
-                }
-            });
-        await using (var store = new SoundLibraryStore(invalidRoot))
-        {
-            var loaded = await store.LoadAsync();
+                7,
+                libraryJson.RootElement.GetProperty("schemaVersion").GetInt32(),
+                "library migrates to schema v7");
+            var soundJson = libraryJson.RootElement
+                .GetProperty("sounds")[0];
             AssertTrue(
-                !loaded.Sounds.Single().NormalizeLoudness,
-                "invalid normalization metadata falls back disabled");
-            AssertTrue(
-                loaded.Warnings.Any(
-                    warning => warning.Contains(
-                        "normalization",
-                        StringComparison.OrdinalIgnoreCase)),
-                "invalid normalization warning");
+                !soundJson.TryGetProperty("normalizeLoudness", out _),
+                "obsolete per-sound normalization is removed");
+            AssertEqual(
+                37d,
+                soundJson.GetProperty("volumePercent").GetDouble(),
+                "per-sound volume stored explicitly");
         }
 
         var settingsRoot = Path.Combine(root, "settings");
-        await using (var settingsStore =
-                     new ApplicationSettingsStore(settingsRoot))
-        {
-            var defaults = (await settingsStore.LoadAsync()).Settings;
-            AssertEqual(
-                -16d,
-                defaults.NormalizationTargetLufs,
-                "default normalization target");
-            AssertTrue(defaults.SafetyLimiterEnabled, "default limiter on");
-            AssertEqual(
-                -1d,
-                defaults.SafetyLimiterCeilingDbfs,
-                "default limiter ceiling");
-            await settingsStore.SaveAsync(
-                defaults with
-                {
-                    NormalizationTargetLufs = -18.5d,
-                    SafetyLimiterEnabled = false,
-                    SafetyLimiterCeilingDbfs = -2.5d
-                });
-        }
-
-        await using (var settingsStore =
-                     new ApplicationSettingsStore(settingsRoot))
-        {
-            var persisted = (await settingsStore.LoadAsync()).Settings;
-            AssertEqual(
-                -18.5d,
-                persisted.NormalizationTargetLufs,
-                "target persists");
-            AssertTrue(
-                !persisted.SafetyLimiterEnabled,
-                "limiter state persists");
-            AssertEqual(
-                -2.5d,
-                persisted.SafetyLimiterCeilingDbfs,
-                "ceiling persists");
-        }
-
+        Directory.CreateDirectory(settingsRoot);
         await File.WriteAllTextAsync(
             Path.Combine(settingsRoot, "settings.json"),
             """
             {
-              "normalizationTargetLufs": 99,
-              "safetyLimiterEnabled": true,
-              "safetyLimiterCeilingDbfs": -20
+              "schemaVersion": 1,
+              "microphoneEndpointId": "physical-endpoint-id",
+              "virtualOutputEndpointId": "cable-render-id",
+              "soundVolume": 0.6,
+              "monitorVolume": 0.4,
+              "microphoneVolume": 1.8,
+              "microphoneMuted": true,
+              "normalizationTargetLufs": -18.0,
+              "safetyLimiterEnabled": false,
+              "safetyLimiterCeilingDbfs": -3.0
             }
             """);
-        await using (var settingsStore =
-                     new ApplicationSettingsStore(settingsRoot))
+
+        ApplicationSettings migratedSettings;
+        await using (var store = new ApplicationSettingsStore(settingsRoot))
         {
-            var invalid = await settingsStore.LoadAsync();
+            var result = await store.LoadAsync();
+            migratedSettings = result.Settings;
+            AssertEqual(2, migratedSettings.SchemaVersion, "settings schema v2");
+            AssertTrue(!migratedSettings.UseDefaultMicrophone, "saved mic remains pinned");
+            AssertTrue(migratedSettings.SetupCompleted, "complete v1 routing is preserved");
             AssertEqual(
-                -16d,
-                invalid.Settings.NormalizationTargetLufs,
-                "invalid target fallback");
+                "physical-endpoint-id",
+                migratedSettings.MicrophoneEndpointId,
+                "stable physical endpoint ID preserved");
             AssertEqual(
-                -1d,
-                invalid.Settings.SafetyLimiterCeilingDbfs,
-                "invalid ceiling fallback");
+                "cable-render-id",
+                migratedSettings.VirtualOutputEndpointId,
+                "stable virtual endpoint ID preserved");
+            AssertEqual(0.6d, migratedSettings.SoundVolume, "master volume preserved");
+            AssertEqual(0.4d, migratedSettings.MonitorVolume, "monitor volume preserved");
             AssertTrue(
-                invalid.Warning is not null,
-                "invalid settings warning");
+                result.Warning?.Contains(
+                    "obsolete",
+                    StringComparison.OrdinalIgnoreCase) == true,
+                "obsolete settings migration is reported");
         }
 
-        Console.WriteLine(
-            "PASS schema v5-to-v6 normalization migration and settings "
-            + "defaults, persistence, and invalid fallback");
-    }
+        using (var settingsJson = JsonDocument.Parse(
+                   await File.ReadAllTextAsync(
+                       Path.Combine(settingsRoot, "settings.json"))))
+        {
+            AssertTrue(
+                !settingsJson.RootElement.TryGetProperty("normalizationTargetLufs", out _)
+                && !settingsJson.RootElement.TryGetProperty("safetyLimiterEnabled", out _)
+                && !settingsJson.RootElement.TryGetProperty("safetyLimiterCeilingDbfs", out _)
+                && !settingsJson.RootElement.TryGetProperty("microphoneVolume", out _)
+                && !settingsJson.RootElement.TryGetProperty("microphoneMuted", out _),
+                "obsolete automatic gain and safety settings are removed");
+        }
 
+        var migratedSettingsHash = await GetFileHashAsync(
+            Path.Combine(settingsRoot, "settings.json"));
+        var migratedSettingsWriteTime = File.GetLastWriteTimeUtc(
+            Path.Combine(settingsRoot, "settings.json"));
+        await using (var store = new ApplicationSettingsStore(settingsRoot))
+        {
+            var secondLoad = await store.LoadAsync();
+            AssertEqual(
+                migratedSettings,
+                secondLoad.Settings,
+                "second launch reads identical migrated settings");
+        }
+        AssertEqual(
+            migratedSettingsHash,
+            await GetFileHashAsync(Path.Combine(settingsRoot, "settings.json")),
+            "second launch does not rewrite migrated settings");
+        AssertEqual(
+            migratedSettingsWriteTime,
+            File.GetLastWriteTimeUtc(Path.Combine(settingsRoot, "settings.json")),
+            "second launch preserves migrated settings timestamp");
+
+        var defaultRoot = Path.Combine(root, "default-mode");
+        Directory.CreateDirectory(defaultRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(defaultRoot, "settings.json"),
+            """{"schemaVersion":1,"virtualOutputEndpointId":"cable-render-id"}""");
+        await using (var store = new ApplicationSettingsStore(defaultRoot))
+        {
+            var settings = (await store.LoadAsync()).Settings;
+            AssertTrue(settings.UseDefaultMicrophone, "missing pinned mic selects Windows default mode");
+            AssertTrue(!settings.SetupCompleted, "incomplete legacy routing shows setup");
+        }
+
+        var failedMigrationRoot = Path.Combine(root, "failed-settings-migration");
+        Directory.CreateDirectory(failedMigrationRoot);
+        var failedMigrationPath = Path.Combine(
+            failedMigrationRoot,
+            "settings.json");
+        var failedMigrationBytes =
+            """{"schemaVersion":1,"microphoneEndpointId":"pinned"}""";
+        await File.WriteAllTextAsync(failedMigrationPath, failedMigrationBytes);
+        await using (var lockedSettings = new FileStream(
+                         failedMigrationPath,
+                         FileMode.Open,
+                         FileAccess.Read,
+                         FileShare.Read))
+        await using (var store = new ApplicationSettingsStore(failedMigrationRoot))
+        {
+            var result = await store.LoadAsync();
+            AssertTrue(
+                result.Warning?.Contains(
+                    "could not be saved",
+                    StringComparison.OrdinalIgnoreCase) == true,
+                "failed settings migration reports the unsaved state");
+            AssertTrue(
+                !result.Settings.UseDefaultMicrophone,
+                "failed settings migration still provides safe in-memory settings");
+        }
+        AssertEqual(
+            failedMigrationBytes,
+            await File.ReadAllTextAsync(failedMigrationPath),
+            "failed migration leaves the previous settings file intact");
+
+        Console.WriteLine(
+            "PASS v1.0 settings migration, default/pinned microphone modes, "
+            + "schema-v7 per-sound volume, idempotent atomic migration, "
+            + "obsolete processing removal, and user-data preservation");
+    }
     private static float[] CreateSineSamples(
         int sampleRate,
         int channels,
@@ -1865,6 +1970,14 @@ internal static class Program
         }
 
         return result.ToArray();
+    }
+
+    private static float[] ReadSamples(ISampleProvider provider, int count)
+    {
+        var buffer = new float[count];
+        var read = provider.Read(buffer, 0, count);
+        AssertEqual(count, read, "requested gain-test sample count");
+        return buffer;
     }
 
     private static void AssertOneShotEndOfStream(
@@ -2512,6 +2625,28 @@ internal static class Program
         int SortOrder,
         string ContentHash,
         HotkeyGesture? Hotkey);
+
+    private sealed class TestDecoderFactory(
+        float[] samples,
+        int sampleRate,
+        int channels) : IAudioFileDecoderFactory
+    {
+        public DecodedAudioSource Open(string filePath)
+        {
+            var duration = TimeSpan.FromSeconds(
+                samples.Length / (double)(sampleRate * channels));
+            return new DecodedAudioSource(
+                Path.GetFileName(filePath),
+                new TestSampleProvider(samples.ToArray(), sampleRate, channels),
+                duration,
+                new AudioFileFormat(
+                    AudioContainerType.Wav,
+                    AudioCodecType.Pcm,
+                    ".wav"),
+                new MemoryStream(),
+                () => Open(filePath));
+        }
+    }
 
     private sealed class TestSampleProvider : ISampleProvider
     {

@@ -9,14 +9,14 @@ public sealed record SoundMetadataUpdate(
     string DisplayName,
     Guid? CategoryId,
     bool IsFavorite,
-    SoundTileAccent TileAccent);
+    SoundTileAccent TileAccent,
+    double VolumePercent);
 
 public sealed record SoundClipMetadataUpdate(
     int TrimStartMilliseconds,
     int? TrimEndMilliseconds,
     int FadeInMilliseconds,
-    int FadeOutMilliseconds,
-    bool NormalizeLoudness = false);
+    int FadeOutMilliseconds);
 
 public sealed record CategoryDeleteResult(
     IReadOnlyList<SoundLibraryEntry> Sounds,

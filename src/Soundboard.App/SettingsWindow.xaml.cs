@@ -5,7 +5,7 @@ using System.Windows.Input;
 namespace Soundboard.App;
 
 /// <summary>
-/// Hosts the advanced audio, monitoring, hotkey, loudness, and diagnostic
+/// Hosts first-run audio setup plus advanced monitoring, hotkey, and diagnostic
 /// controls that used to crowd the main soundboard.
 /// </summary>
 /// <remarks>

@@ -2,7 +2,6 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Soundboard.App.Hotkeys;
 using Soundboard.App.Storage;
-using Soundboard.Audio;
 
 namespace Soundboard.App.Presentation;
 
@@ -16,8 +15,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         "Drag or use Move earlier/Move later to reorder.";
     private string hotkeyStateText;
     private string? hotkeyError;
-    private LoudnessAnalysisKey? loudnessAnalysisKey;
-    private LoudnessAnalysisResult? loudnessAnalysisResult;
 
     public SoundTileViewModel(
         SoundLibraryEntry sound,
@@ -43,23 +40,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
     public string EditedStateText => sound.HasClipEdits ? "Trimmed" : string.Empty;
 
     public bool HasClipEdits => sound.HasClipEdits;
-
-    public bool HasValidNormalizationAnalysis =>
-        sound.NormalizeLoudness
-        && loudnessAnalysisResult?.IsValid == true
-        && loudnessAnalysisKey
-            == LoudnessAnalysisKey.Create(
-                sound.ContentHash,
-                sound.ClipSettings);
-
-    public string NormalizationStateText => !sound.NormalizeLoudness
-        ? string.Empty
-        : HasValidNormalizationAnalysis
-            ? "Normalized"
-            : "Normalization needs analysis";
-
-    public LoudnessAnalysisResult? MatchingLoudnessAnalysis =>
-        HasValidNormalizationAnalysis ? loudnessAnalysisResult : null;
 
     public string FormatLabel => sound.FormatLabel;
 
@@ -165,11 +145,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
                 parts.Add("Trimmed");
             }
 
-            if (sound.NormalizeLoudness)
-            {
-                parts.Add(NormalizationStateText);
-            }
-
             return string.Join(", ", parts);
         }
     }
@@ -216,14 +191,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         }
 
         sound = replacement;
-        if (loudnessAnalysisKey
-            != LoudnessAnalysisKey.Create(
-                replacement.ContentHash,
-                replacement.ClipSettings))
-        {
-            loudnessAnalysisKey = null;
-            loudnessAnalysisResult = null;
-        }
         if (replacementCategoryName is not null)
         {
             categoryName = replacementCategoryName;
@@ -234,9 +201,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(DurationText));
         OnPropertyChanged(nameof(EditedStateText));
         OnPropertyChanged(nameof(HasClipEdits));
-        OnPropertyChanged(nameof(HasValidNormalizationAnalysis));
-        OnPropertyChanged(nameof(NormalizationStateText));
-        OnPropertyChanged(nameof(MatchingLoudnessAnalysis));
         OnPropertyChanged(nameof(FormatLabel));
         OnPropertyChanged(nameof(Sound));
         OnPropertyChanged(nameof(CategoryName));
@@ -246,21 +210,6 @@ public sealed class SoundTileViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(TileAccent));
         OnPropertyChanged(nameof(HasHotkey));
         OnPropertyChanged(nameof(HotkeyDisplayText));
-        OnPropertyChanged(nameof(TileAutomationName));
-    }
-
-    public void SetLoudnessAnalysis(
-        LoudnessAnalysisKey key,
-        LoudnessAnalysisResult? result)
-    {
-        var currentKey = LoudnessAnalysisKey.Create(
-            sound.ContentHash,
-            sound.ClipSettings);
-        loudnessAnalysisKey = key == currentKey ? key : null;
-        loudnessAnalysisResult = key == currentKey ? result : null;
-        OnPropertyChanged(nameof(HasValidNormalizationAnalysis));
-        OnPropertyChanged(nameof(NormalizationStateText));
-        OnPropertyChanged(nameof(MatchingLoudnessAnalysis));
         OnPropertyChanged(nameof(TileAutomationName));
     }
 
