@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$Version = '1.0.0',
+    [string]$Version = '1.1.0',
 
     [switch]$SkipTests,
 
@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$audioRedesignCommit = 'c59234defb2e5791995b7c5a67ff47bedbfefb67'
 
 function Invoke-NativeCommand {
     param(
@@ -247,6 +249,11 @@ try {
         $gitCommit -notmatch '^[0-9a-f]{40}$') {
         throw 'Could not determine the current Git commit.'
     }
+    & git merge-base --is-ancestor $audioRedesignCommit $gitCommit
+    if ($LASTEXITCODE -ne 0) {
+        throw "Audio redesign commit '$audioRedesignCommit' is not an " +
+            "ancestor of '$gitCommit'."
+    }
     $gitStatus = @(& git status --porcelain --untracked-files=normal)
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not determine whether the Git working tree is dirty.'
@@ -395,7 +402,7 @@ try {
     $portableReadme = (
         Get-Content -LiteralPath (
             Join-Path $releaseSource 'README.txt') -Raw
-    ).Replace('1.0.0', $Version)
+    ).Replace('1.1.0', $Version)
     Set-Content -LiteralPath (
         Join-Path $portableRoot 'README.txt') -Value $portableReadme -Encoding utf8
     Copy-Item -LiteralPath (
@@ -467,6 +474,10 @@ command. Use -SkipInstaller only for an explicitly portable-only build.
         projectLicense = 'MIT'
         version = $Version
         gitCommit = $gitCommit
+        sourceCommits = [ordered]@{
+            audioRedesign = $audioRedesignCommit
+            release = $gitCommit
+        }
         gitWorkingTreeDirty = $gitWorkingTreeDirty
         buildUtc = [DateTime]::UtcNow.ToString('o')
         runtimeIdentifier = 'win-x64'

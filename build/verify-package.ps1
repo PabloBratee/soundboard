@@ -1,13 +1,15 @@
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$Version = '1.0.0',
+    [string]$Version = '1.1.0',
 
     [switch]$SkipInstaller
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$audioRedesignCommit = 'c59234defb2e5791995b7c5a67ff47bedbfefb67'
 
 Add-Type -AssemblyName System.IO.Compression
 
@@ -272,6 +274,15 @@ Assert-Condition ($currentGitStatus.Count -eq 0) (
     'Package verification requires a clean Git working tree.')
 Assert-Condition ($manifest.gitCommit -eq $currentGitCommit) (
     'Release manifest does not identify the current committed source.')
+Assert-Condition (
+    $manifest.sourceCommits.audioRedesign -eq $audioRedesignCommit
+) 'Release manifest does not identify the audio-redesign commit.'
+Assert-Condition ($manifest.sourceCommits.release -eq $currentGitCommit) (
+    'Release manifest does not identify the release commit.')
+& git -C $repositoryRoot merge-base --is-ancestor `
+    $manifest.sourceCommits.audioRedesign $manifest.sourceCommits.release
+Assert-Condition ($LASTEXITCODE -eq 0) (
+    'The audio-redesign commit is not an ancestor of the release commit.')
 Assert-Condition ($manifest.gitWorkingTreeDirty -eq $false) (
     'Release manifest does not report a clean Git working tree.')
 Assert-Condition ($manifest.runtimeIdentifier -eq 'win-x64') (
