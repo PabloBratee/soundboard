@@ -15,6 +15,7 @@ uses no telemetry or cloud storage, and does not access the network.
 - Ogg Opus and Ogg Vorbis playback, including `.opus` files in an Ogg
   container
 - Persistent local sound library
+- Empty library on first launch, ready for user-controlled audio imports
 - Categories, Favorites, search, and persistent manual ordering
 - Tile accents and other tile personalization
 - Windows global hotkeys using registered key combinations
@@ -32,6 +33,11 @@ uses no telemetry or cloud storage, and does not access the network.
 Soundboard never modifies imported source files. It copies supported files
 into its managed local library and stores trim, fade, volume, category,
 hotkey, and personalization settings as metadata.
+
+Soundboard includes no audio content and does not seed, download, or suggest
+sounds. Users add their own audio through the Import Sounds command and are
+responsible for using media they are authorized to use. Managed copies remain
+local under `%LOCALAPPDATA%\Soundboard`.
 
 ## Requirements
 
@@ -186,8 +192,9 @@ see [the architecture decision](docs/audio-architecture.md).
 
 Soundboard source code is available under the [MIT License](LICENSE).
 Third-party dependencies retain their own licenses; distribution notices and
-license texts are under [`release`](release). The installer and portable build
-are unsigned.
+license texts are under [`release`](release). The project license applies to
+the software, not to audio or other media imported by users. Soundboard ships
+with no audio content. The installer and portable build are unsigned.
 
 The MIT License does not grant trademark rights to the Soundboard name, logo,
 or branding beyond uses necessary to describe the software and exercise the

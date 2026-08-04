@@ -43,6 +43,9 @@ On first launch, Soundboard opens a short setup page:
 
 Soundboard starts microphone passthrough automatically and reconnects after
 endpoint changes. In Discord or a game, select CABLE Output once as the input.
+The sound library starts empty. Soundboard includes no audio content and does
+not seed, download, or suggest sounds; use Import Sounds to add audio files you
+are authorized to use.
 
 DISCORD ROUTING
 ---------------
@@ -66,8 +69,8 @@ Soundboard stores user data in:
 
 %LOCALAPPDATA%\Soundboard
 
-That directory contains imported managed audio, library.json, settings.json,
-and the waveform cache. Backing up the entire
+That directory contains local managed copies of user-imported audio,
+library.json, settings.json, and waveform caches. Backing up the entire
 Soundboard directory preserves the library and settings. Changing the
 application installation folder does not move any of this user data.
 
@@ -105,6 +108,9 @@ Soundboard source code and the project-owned application are licensed under
 the MIT License. See LICENSE.txt included with this distribution.
 
 Third-party components retain their own licenses. See
-THIRD-PARTY-NOTICES.txt and the licenses directory. The MIT License does not
-grant trademark rights to the Soundboard name, logo, or branding beyond uses
-necessary to describe the software and exercise the license.
+THIRD-PARTY-NOTICES.txt and the licenses directory. The project license applies
+to the software, not to audio or other media imported by users. Users are
+responsible for importing only media they are authorized to use. The MIT
+License does not grant trademark rights to the Soundboard name, logo, or
+branding beyond uses necessary to describe the software and exercise the
+license.

@@ -35,6 +35,30 @@ function Assert-File {
     ) "Expected artifact is missing: $Path"
 }
 
+function Assert-NoMachineSpecificPaths {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string[]]$ForbiddenRoots
+    )
+
+    $binaryText = [System.Text.Encoding]::Latin1.GetString(
+        [System.IO.File]::ReadAllBytes($Path))
+    foreach ($root in $ForbiddenRoots) {
+        if ([string]::IsNullOrWhiteSpace($root)) {
+            continue
+        }
+
+        Assert-Condition (
+            !$binaryText.Contains(
+                $root,
+                [StringComparison]::OrdinalIgnoreCase)
+        ) "Packaged binary contains a machine-specific build path."
+    }
+}
+
 function Get-PeMachine {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -74,6 +98,11 @@ $installerArtifact = Join-Path $releaseRoot $installerFileName
 $manifestPath = Join-Path $releaseRoot 'release-manifest.json'
 $checksumsPath = Join-Path $releaseRoot 'SHA256SUMS.txt'
 $installerSource = Join-Path $repositoryRoot 'installer\Soundboard.iss'
+$forbiddenMachineRoots = @(
+    $repositoryRoot
+    [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::UserProfile)
+) | Sort-Object -Unique
 
 Assert-File $portableArchive
 Assert-File $manifestPath
@@ -160,10 +189,13 @@ $expectedZipFiles = @(
 ) | Sort-Object
 $forbiddenExtensions = @(
     '.pdb', '.cs', '.csproj', '.sln', '.json', '.config', '.log',
-    '.wav', '.mp3', '.ogg', '.opus', '.flac', '.m4a', '.aac')
+    '.wav', '.mp3', '.ogg', '.opus', '.flac', '.m4a', '.aac', '.wma')
 $forbiddenNames = @(
     'library.json', 'settings.json', 'project.assets.json',
     'Soundboard.App.Tests.dll')
+$forbiddenPackagedText =
+    '(?i)(?:(?<![A-Za-z])[A-Z]:[\\/]|StarterLibrary|' +
+    'myinstants\.com|youtube\.com|youtu\.be)'
 
 $zipStream = [System.IO.File]::OpenRead($portableArchive)
 $zip = [System.IO.Compression.ZipArchive]::new(
@@ -195,8 +227,22 @@ try {
         ) "ZIP contains forbidden development or user file '$entryPath'."
         Assert-Condition (
             $entry.Name -notin $forbiddenNames -and
-            $entryPath -notmatch '(?i)(waveform|analysis)[-/\\]?cache'
+            $entryPath -notmatch
+                '(?i)(waveform|analysis)[-/\\]?cache|starter.?library'
         ) "ZIP contains forbidden user or test data '$entryPath'."
+
+        if ($extension.Equals('.txt', [StringComparison]::OrdinalIgnoreCase)) {
+            $reader = [System.IO.StreamReader]::new($entry.Open(), $true)
+            try {
+                $text = $reader.ReadToEnd()
+            }
+            finally {
+                $reader.Dispose()
+            }
+            Assert-Condition ($text -notmatch $forbiddenPackagedText) (
+                "ZIP text file contains a source URL, starter-library " +
+                "reference, or machine-specific path: '$entryPath'.")
+        }
 
         if ($entryPath -eq 'Soundboard/Soundboard.exe') {
             $executableEntry = $entry
@@ -237,6 +283,9 @@ try {
     Assert-Condition (
         (Get-PeMachine $temporaryExecutable) -eq 0x8664
     ) 'Soundboard.exe is not an x64 PE image.'
+    Assert-NoMachineSpecificPaths `
+        -Path $temporaryExecutable `
+        -ForbiddenRoots $forbiddenMachineRoots
     $applicationSignature = Get-AuthenticodeSignature -FilePath (
         $temporaryExecutable)
     Assert-Condition (
@@ -259,6 +308,9 @@ Assert-Condition ($manifest.product -eq 'Soundboard') (
     'Release manifest has the wrong product.')
 Assert-Condition ($manifest.projectLicense -eq 'MIT') (
     'Release manifest does not identify the project license as MIT.')
+Assert-Condition (
+    $manifest.PSObject.Properties.Name -notcontains 'bundledContentLicensing'
+) 'Release manifest must not describe bundled starter content.'
 Assert-Condition ($manifest.version -eq $Version) (
     'Release manifest has the wrong version.')
 Assert-Condition ($manifest.gitCommit -match '^[0-9a-f]{40}$') (
@@ -354,6 +406,9 @@ if (!$SkipInstaller) {
     Assert-Condition ($installerProductVersion -eq $Version) (
         "Installer product version '$(
             $installerVersion.ProductVersion)' does not match '$Version'.")
+    Assert-NoMachineSpecificPaths `
+        -Path $installerArtifact `
+        -ForbiddenRoots $forbiddenMachineRoots
     $installerSignature = Get-AuthenticodeSignature -FilePath (
         $installerArtifact)
     Assert-Condition (

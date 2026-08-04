@@ -284,6 +284,8 @@ try {
         "-p:AssemblyVersion=$numericVersion"
         "-p:FileVersion=$numericVersion"
         "-p:InformationalVersion=$Version"
+        '-p:DebugSymbols=false'
+        '-p:DebugType=None'
     )
 
     Invoke-NativeCommand 'dotnet' @(
@@ -328,7 +330,8 @@ try {
         $solutionPath,
         '--configuration',
         'Release',
-        '--no-restore') + $versionProperties)
+        '--no-restore',
+        '--no-incremental') + $versionProperties)
 
     if (!$SkipTests) {
         Invoke-NativeCommand 'dotnet' @(
@@ -366,9 +369,7 @@ try {
         '--no-restore',
         '--output',
         $publishRoot,
-        "-p:PublishProfile=$publishProfile",
-        '-p:DebugSymbols=false',
-        '-p:DebugType=None') + $versionProperties)
+        "-p:PublishProfile=$publishProfile") + $versionProperties)
 
     $publishedExecutable = Join-Path $publishRoot 'Soundboard.exe'
     Assert-File $publishedExecutable

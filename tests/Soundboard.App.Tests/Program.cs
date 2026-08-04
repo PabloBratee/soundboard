@@ -36,6 +36,8 @@ internal static class Program
             await RunAutomaticAudioServiceLifecycleTestsAsync();
             await RunMigrationAndOrganizationTestsAsync(
                 Path.Combine(testRoot, "organization"));
+            await RunEmptyLibraryLifecycleTestsAsync(
+                Path.Combine(testRoot, "empty-library"));
             await RunImportAndSearchTestsAsync(
                 Path.Combine(testRoot, "import"));
             await RunInvalidMetadataFallbackTestAsync(
@@ -1568,6 +1570,29 @@ internal static class Program
             restartedSession.VirtualBranch.Read(new float[8], 0, 8),
             "sound does not loop or replay after end-of-stream");
 
+        var rapidSoundId = Guid.NewGuid();
+        for (var trigger = 0; trigger < 25; trigger++)
+        {
+            var rapidSession = new SoundPlaybackSession(
+                rapidSoundId,
+                trigger + 3,
+                "fixture.wav",
+                clipSettings,
+                decoderFactory,
+                WaveFormat.CreateIeeeFloatWaveFormat(1000, 1),
+                volumePercent: 100d,
+                masterGain: 1f,
+                monitorGain: 1f);
+            AssertTrue(
+                rapidSession.VirtualBranch.Read(new float[8], 0, 8) > 0,
+                "rapid retrigger session starts at decodable audio");
+            rapidSession.Dispose();
+            AssertEqual(
+                0,
+                rapidSession.VirtualBranch.Read(new float[8], 0, 8),
+                "replaced rapid retrigger session remains disposed");
+        }
+
         using var concurrentSession = new SoundPlaybackSession(
             Guid.NewGuid(),
             3,
@@ -1603,7 +1628,8 @@ internal static class Program
         Console.WriteLine(
             "PASS squared volume curve, exact silence/unity, bounded live ramps, "
             + "single-application gain, microphone independence, concurrent "
-            + "one-shots, restart, no-loop EOS, and transparent final-boundary clipping");
+            + "one-shots, bounded rapid restart, no-loop EOS, and transparent "
+            + "final-boundary clipping");
     }
     private static async Task RunVersionOneSettingsAndVolumeMigrationTestsAsync(
         string root)
@@ -2414,6 +2440,109 @@ internal static class Program
             "future schema is not downgraded");
         Console.WriteLine(
             "PASS invalid format fallback and future schema preservation");
+    }
+
+    private static async Task RunEmptyLibraryLifecycleTestsAsync(string root)
+    {
+        Directory.CreateDirectory(root);
+        var source = Path.Combine(root, "user-owned.wav");
+        WriteTestWave(source);
+
+        var resourceNames = typeof(SoundLibraryStore).Assembly
+            .GetManifestResourceNames();
+        var audioExtensions = new[]
+        {
+            ".mp3", ".wav", ".ogg", ".opus", ".flac", ".m4a", ".aac", ".wma"
+        };
+        AssertTrue(
+            resourceNames.All(
+                name => !audioExtensions.Any(
+                    extension => name.EndsWith(
+                        extension,
+                        StringComparison.OrdinalIgnoreCase))),
+            "application assembly contains no embedded audio resources");
+        AssertTrue(
+            resourceNames.All(
+                name => !name.Contains(
+                    "StarterLibrary",
+                    StringComparison.OrdinalIgnoreCase)),
+            "application assembly contains no starter-library resources");
+
+        Guid soundId;
+        string managedPath;
+        string contentHash;
+        var hotkey = new HotkeyGesture(
+            0x47,
+            HotkeyModifiers.Control | HotkeyModifiers.Shift,
+            "Ctrl + Shift + G");
+        await using (var store = new SoundLibraryStore(root))
+        {
+            var fresh = await store.LoadAsync();
+            AssertEqual(0, fresh.Sounds.Count, "fresh library has zero sounds");
+            AssertEqual(0, fresh.Categories.Count, "fresh library has zero categories");
+            AssertEqual(
+                0,
+                Directory.GetFiles(store.SoundsPath).Length,
+                "startup creates no managed audio");
+
+            var category = await store.CreateCategoryAsync("Personal");
+            var import = await store.ImportAsync([source], category.Id);
+            AssertEqual(1, import.Imported.Count, "user-controlled WAV import succeeds");
+            AssertEqual(0, import.Duplicates.Count, "first import is not a duplicate");
+            var updated = await store.UpdateSoundAsync(
+                import.Imported[0].Id,
+                new SoundMetadataUpdate(
+                    "User Sound",
+                    category.Id,
+                    true,
+                    SoundTileAccent.Purple,
+                    75d));
+            updated = await store.UpdateHotkeyAsync(updated.Id, hotkey);
+            soundId = updated.Id;
+            managedPath = store.GetManagedFilePath(updated);
+            contentHash = updated.ContentHash;
+            AssertTrue(File.Exists(managedPath), "import creates a managed local copy");
+        }
+
+        await using (var restarted = new SoundLibraryStore(root))
+        {
+            var loaded = await restarted.LoadAsync();
+            var preserved = loaded.Sounds.Single();
+            AssertEqual(soundId, preserved.Id, "restart preserves imported sound ID");
+            AssertEqual("User Sound", preserved.DisplayName, "restart preserves user name");
+            AssertEqual(contentHash, preserved.ContentHash, "restart preserves content hash");
+            AssertEqual(hotkey, preserved.Hotkey, "restart preserves user hotkey");
+            AssertTrue(preserved.IsFavorite, "restart preserves favorite setting");
+            AssertEqual(
+                SoundTileAccent.Purple,
+                preserved.TileAccent,
+                "restart preserves tile settings");
+
+            var duplicate = await restarted.ImportAsync([source]);
+            AssertEqual(0, duplicate.Imported.Count, "duplicate import is rejected");
+            AssertEqual(1, duplicate.Duplicates.Count, "duplicate is reported");
+
+            var warnings = await restarted.RemoveAsync(soundId);
+            AssertEqual(0, warnings.Count, "imported sound deletion succeeds");
+            AssertTrue(!File.Exists(managedPath), "deletion removes the managed copy");
+        }
+
+        await using (var afterDeletion = new SoundLibraryStore(root))
+        {
+            var loaded = await afterDeletion.LoadAsync();
+            AssertEqual(
+                0,
+                loaded.Sounds.Count,
+                "deleted sound does not return on restart");
+            AssertEqual(
+                0,
+                Directory.GetFiles(afterDeletion.SoundsPath).Length,
+                "restart does not recreate deleted audio");
+        }
+
+        Console.WriteLine(
+            "PASS empty startup, no embedded audio, user import, duplicate "
+            + "protection, metadata persistence, and no restore after deletion");
     }
 
     private static VersionTwoSoundDocument CreateVersionTwoSound(
