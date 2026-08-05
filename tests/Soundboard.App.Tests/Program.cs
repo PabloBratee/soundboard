@@ -32,6 +32,7 @@ internal static class Program
         {
             Directory.CreateDirectory(testRoot);
             RunSingleInstanceTests();
+            RunHotkeyGestureTests();
             RunEndpointSelectionTests();
             await RunAutomaticAudioServiceLifecycleTestsAsync();
             await RunMigrationAndOrganizationTestsAsync(
@@ -102,6 +103,97 @@ internal static class Program
 
         Console.WriteLine(
             "PASS single-instance acquisition, rejection, and release");
+    }
+
+    private static void RunHotkeyGestureTests()
+    {
+        AssertTrue(
+            HotkeyGesture.TryCreate(
+                0x70,
+                HotkeyModifiers.None,
+                out var f1,
+                out var f1Error),
+            $"F1 without modifiers is valid: {f1Error}");
+        AssertEqual("F1", f1!.DisplayText, "F1 display text");
+        AssertEqual(
+            0x4000u,
+            GlobalHotkeyService.GetNativeModifiers(f1.Modifiers),
+            "F1 registration uses MOD_NOREPEAT without key modifiers");
+        var registrationConflictError =
+            GlobalHotkeyService.BuildRegistrationError(f1, 1409);
+        AssertTrue(
+            registrationConflictError.StartsWith(
+                "Windows could not register F1.",
+                StringComparison.Ordinal)
+            && registrationConflictError.Contains(
+                "reserved or owned by another application",
+                StringComparison.Ordinal),
+            "a Windows registration conflict has a clear error message");
+
+        AssertTrue(
+            HotkeyGesture.TryCreate(
+                0x70,
+                HotkeyModifiers.Shift,
+                out var shiftF1,
+                out var shiftF1Error),
+            $"Shift + F1 remains valid: {shiftF1Error}");
+        AssertEqual(
+            "Shift + F1",
+            shiftF1!.DisplayText,
+            "Shift + F1 display text");
+        AssertEqual(
+            0x4004u,
+            GlobalHotkeyService.GetNativeModifiers(shiftF1.Modifiers),
+            "Shift + F1 registration modifiers");
+
+        foreach (var (virtualKey, expectedDisplay) in new[]
+                 {
+                     (0x41u, "A"),
+                     (0x31u, "1"),
+                     (0x61u, "Num 1")
+                 })
+        {
+            AssertTrue(
+                HotkeyGesture.TryCreate(
+                    virtualKey,
+                    HotkeyModifiers.None,
+                    out var singleKey,
+                    out var singleKeyError),
+                $"{expectedDisplay} without modifiers is valid: "
+                    + singleKeyError);
+            AssertEqual(
+                expectedDisplay,
+                singleKey!.DisplayText,
+                $"{expectedDisplay} display text");
+        }
+
+        AssertTrue(
+            !HotkeyGesture.TryCreate(
+                0x11,
+                HotkeyModifiers.None,
+                out _,
+                out _),
+            "a modifier-only Control input is rejected");
+
+        var existingCombination = new HotkeyGesture(
+            0x70,
+            HotkeyModifiers.Control | HotkeyModifiers.Shift,
+            "Ctrl + Shift + F1");
+        AssertTrue(
+            HotkeyGesture.TryNormalize(
+                existingCombination,
+                out var normalizedExistingCombination,
+                out var normalizationError),
+            $"existing modifier combination remains compatible: "
+                + normalizationError);
+        AssertEqual(
+            existingCombination,
+            normalizedExistingCombination,
+            "existing modifier combination normalization");
+
+        Console.WriteLine(
+            "PASS optional hotkey modifiers, display text, validation, "
+            + "registration flags, and existing combinations");
     }
 
     private static void RunEndpointSelectionTests()
@@ -758,10 +850,24 @@ internal static class Program
         var echo = songsImport.Imported[1].Id;
 
         var hotkey = new HotkeyGesture(
-            0x51,
-            HotkeyModifiers.Control | HotkeyModifiers.Shift,
-            "Ctrl + Shift + Q");
+            0x70,
+            HotkeyModifiers.None,
+            "F1");
         await store.UpdateHotkeyAsync(alpha, hotkey);
+        string? duplicateHotkeyError = null;
+        try
+        {
+            await store.UpdateHotkeyAsync(bravo, hotkey);
+        }
+        catch (InvalidOperationException exception)
+        {
+            duplicateHotkeyError = exception.Message;
+        }
+
+        AssertEqual(
+            "F1 is already assigned to another sound.",
+            duplicateHotkeyError,
+            "duplicate F1 hotkey assignment error");
         await store.UpdateSoundAsync(
             alpha,
             new SoundMetadataUpdate(

@@ -598,7 +598,7 @@ public sealed partial class GlobalHotkeyService : IDisposable
             binding.Error);
     }
 
-    private static string BuildRegistrationError(
+    internal static string BuildRegistrationError(
         HotkeyGesture hotkey,
         int errorCode)
     {
@@ -615,6 +615,11 @@ public sealed partial class GlobalHotkeyService : IDisposable
         return target.Kind == HotkeyTargetKind.StopSound
             ? "Stop Sound"
             : $"sound {target.SoundId}";
+    }
+
+    internal static uint GetNativeModifiers(HotkeyModifiers modifiers)
+    {
+        return (uint)modifiers | ModNoRepeat;
     }
 
     private sealed class Binding(
@@ -648,7 +653,7 @@ public sealed partial class GlobalHotkeyService : IDisposable
             var result = NativeMethods.RegisterHotKey(
                 windowHandle,
                 registrationId,
-                (uint)modifiers | ModNoRepeat,
+                GetNativeModifiers(modifiers),
                 virtualKey);
             errorCode = result
                 ? 0

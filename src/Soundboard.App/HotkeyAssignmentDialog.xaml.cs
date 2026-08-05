@@ -18,7 +18,7 @@ public partial class HotkeyAssignmentDialog : Window
         CurrentHotkeyTextBlock.Text =
             currentHotkey?.DisplayText ?? "No hotkey";
         ProposedHotkeyTextBlock.Text =
-            currentHotkey?.DisplayText ?? "Press a combination…";
+            currentHotkey?.DisplayText ?? "Press a key…";
         SaveButton.IsEnabled = currentHotkey is not null;
         Loaded += (_, _) => CaptureArea.Focus();
     }
@@ -55,7 +55,7 @@ public partial class HotkeyAssignmentDialog : Window
             or Key.None)
         {
             SetValidation(
-                "Press a non-modifier key while holding any modifiers.",
+                "Choose a non-modifier key.",
                 isProblem: true);
             eventArgs.Handled = true;
             return;
@@ -95,7 +95,7 @@ public partial class HotkeyAssignmentDialog : Window
         if (ProposedHotkey is null)
         {
             SetValidation(
-                "Capture a valid combination before saving.",
+                "Capture a valid key or key combination before saving.",
                 isProblem: true);
             CaptureArea.Focus();
             return;

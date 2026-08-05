@@ -57,15 +57,6 @@ public sealed record HotkeyGesture
             return false;
         }
 
-        if (RequiresModifier(virtualKey)
-            && normalizedModifiers == HotkeyModifiers.None)
-        {
-            hotkey = null;
-            error =
-                "This key requires Ctrl, Alt, Shift, or the Windows key.";
-            return false;
-        }
-
         var displayText = Format(normalizedModifiers, keyName);
         hotkey = new HotkeyGesture(
             virtualKey,
@@ -97,22 +88,6 @@ public sealed record HotkeyGesture
         }
 
         return true;
-    }
-
-    private static bool RequiresModifier(uint virtualKey)
-    {
-        return virtualKey is >= 0x30 and <= 0x39
-            or >= 0x41 and <= 0x5A
-            or >= 0x60 and <= 0x69
-            or >= 0x70 and <= 0x7B
-            or 0x08
-            or 0x09
-            or 0x0D
-            or 0x1B
-            or 0x20
-            or >= 0x21 and <= 0x28
-            or 0x2D
-            or 0x2E;
     }
 
     private static bool TryGetKeyName(
