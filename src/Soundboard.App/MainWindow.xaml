@@ -11,6 +11,7 @@
         FontFamily="{StaticResource UiFontFamily}"
         FontSize="{StaticResource FontSizeBody}"
         Foreground="{StaticResource TextPrimaryBrush}"
+        PreviewKeyDown="MainWindow_PreviewKeyDown"
         TextOptions.TextFormattingMode="Ideal"
         WindowStartupLocation="CenterScreen">
 
@@ -95,12 +96,38 @@
             </Setter>
         </Style>
 
-        <Style x:Key="TileBadgeTextStyle" TargetType="TextBlock">
+        <!--
+            Compact secondary chip used for hotkey, category, and clip-edit
+            state. One shared style keeps every badge on the same radius,
+            padding, and border so the tile reads as a single system.
+        -->
+        <Style x:Key="TileChipStyle" TargetType="Border">
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="Padding" Value="6,1" />
+            <Setter Property="Background" Value="{StaticResource SurfaceRaisedBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+
+        <Style x:Key="TileChipTextStyle" TargetType="TextBlock">
             <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}" />
             <Setter Property="FontSize" Value="{StaticResource FontSizeMicro}" />
             <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
             <Setter Property="TextWrapping" Value="NoWrap" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
+        <!-- Hover/focus-revealed tile action. -->
+        <Style x:Key="TileActionButtonStyle"
+               TargetType="ButtonBase"
+               BasedOn="{StaticResource IconButtonStyle}">
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="FontSize" Value="{StaticResource FontSizeCaption}" />
         </Style>
 
         <Style x:Key="StatusChipStyle" TargetType="Border">
@@ -237,7 +264,7 @@
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,0,1,0">
                 <DockPanel Margin="10,14,10,10">
-                    <Grid DockPanel.Dock="Top" Margin="4,0,0,8">
+                    <Grid DockPanel.Dock="Top" Margin="4,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
@@ -254,8 +281,8 @@
                                 Click="CreateCategoryButton_Click"
                                 Content="&#xE710;"
                                 Style="{StaticResource IconButtonStyle}"
-                                ToolTip="Create category"
-                                AutomationProperties.Name="Create category" />
+                                ToolTip="New category — type a name and press Enter"
+                                AutomationProperties.Name="New category" />
                         <Button x:Name="ManageCategoriesButton"
                                 Grid.Column="2"
                                 Width="28"
@@ -289,11 +316,61 @@
                         </Button>
                     </Grid>
 
+                    <!--
+                        Inline category editor. Creating and renaming a
+                        category is a one-field operation, so it happens in
+                        place instead of in a modal window.
+                    -->
+                    <Border x:Name="CategoryEditorPanel"
+                            DockPanel.Dock="Top"
+                            Margin="0,0,0,8"
+                            Padding="8"
+                            Background="{StaticResource SurfaceBackgroundBrush}"
+                            BorderBrush="{StaticResource BorderStrongBrush}"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource ControlCornerRadius}"
+                            SnapsToDevicePixels="True"
+                            Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="CategoryEditorTitleTextBlock"
+                                       Margin="0,0,0,6"
+                                       Style="{StaticResource SectionHeadingTextStyle}"
+                                       Text="NEW CATEGORY" />
+                            <TextBox x:Name="CategoryEditorTextBox"
+                                     MaxLength="60"
+                                     KeyDown="CategoryEditorTextBox_KeyDown"
+                                     TextChanged="CategoryEditorTextBox_TextChanged"
+                                     ToolTip="Press Enter to confirm or Escape to cancel"
+                                     AutomationProperties.Name="Category name" />
+                            <TextBlock x:Name="CategoryEditorErrorTextBlock"
+                                       Margin="0,6,0,0"
+                                       Style="{StaticResource ErrorLineStyle}"
+                                       AutomationProperties.LiveSetting="Assertive" />
+                            <StackPanel Margin="0,8,0,0"
+                                        HorizontalAlignment="Right"
+                                        Orientation="Horizontal">
+                                <Button MinWidth="64"
+                                        Padding="10,5"
+                                        Click="CategoryEditorCancelButton_Click"
+                                        Content="Cancel"
+                                        AutomationProperties.Name="Cancel category name" />
+                                <Button x:Name="CategoryEditorConfirmButton"
+                                        Margin="8,0,0,0"
+                                        MinWidth="64"
+                                        Padding="10,5"
+                                        Click="CategoryEditorConfirmButton_Click"
+                                        Content="Create"
+                                        Style="{StaticResource PrimaryButtonStyle}"
+                                        AutomationProperties.Name="Confirm category name" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <TextBlock x:Name="SidebarHintTextBlock"
                                DockPanel.Dock="Bottom"
                                Margin="4,10,4,0"
                                Style="{StaticResource MutedTextStyle}"
-                               Text="Built-in views come first, then your categories." />
+                               Text="Drag sounds or files onto a category to file them there." />
 
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <ListBox x:Name="LibraryViewsListBox"
@@ -308,36 +385,99 @@
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Height="32">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="26" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="ViewGlyph"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   FontFamily="{StaticResource IconFontFamily}"
-                                                   FontSize="13"
-                                                   Text="&#xE8B7;" />
-                                        <TextBlock Grid.Column="1"
-                                                   Margin="8,0,6,0"
-                                                   VerticalAlignment="Center"
-                                                   Text="{Binding DisplayName}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding DisplayName}" />
-                                        <Border Grid.Column="2"
-                                                Margin="0,0,6,0"
-                                                Padding="7,1"
-                                                VerticalAlignment="Center"
-                                                Background="{StaticResource SurfaceRaisedBackgroundBrush}"
-                                                CornerRadius="{StaticResource PillCornerRadius}"
-                                                Visibility="{Binding SidebarCountVisibility, RelativeSource={RelativeSource AncestorType=Window}}">
-                                            <TextBlock FontSize="{StaticResource FontSizeMicro}"
-                                                       Foreground="{StaticResource TextMutedBrush}"
-                                                       Text="{Binding SoundCountText}" />
+                                    <StackPanel>
+                                        <!-- Divider that separates built-in views from user categories. -->
+                                        <StackPanel x:Name="SectionHeader"
+                                                    Margin="0,8,0,2"
+                                                    Visibility="Collapsed">
+                                            <Border Height="1"
+                                                    Margin="2,0,2,6"
+                                                    Background="{StaticResource BorderBrush}" />
+                                            <TextBlock Margin="4,0,0,4"
+                                                       Style="{StaticResource SectionHeadingTextStyle}"
+                                                       Text="CATEGORIES" />
+                                        </StackPanel>
+                                        <Border x:Name="ViewItemRoot"
+                                                AllowDrop="True"
+                                                Background="Transparent"
+                                                BorderBrush="Transparent"
+                                                BorderThickness="1"
+                                                CornerRadius="{StaticResource ControlCornerRadius}"
+                                                ContextMenuOpening="LibraryViewItem_ContextMenuOpening"
+                                                DragEnter="LibraryViewItem_DragOver"
+                                                DragLeave="LibraryViewItem_DragLeave"
+                                                DragOver="LibraryViewItem_DragOver"
+                                                Drop="LibraryViewItem_Drop"
+                                                SnapsToDevicePixels="True"
+                                                Tag="{Binding}">
+                                            <Border.ContextMenu>
+                                                <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                    <MenuItem Header="Rename category"
+                                                              Click="RenameCategoryMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Rename this category" />
+                                                    <MenuItem Header="Move category earlier"
+                                                              Click="MoveCategoryEarlierMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Move this category earlier" />
+                                                    <MenuItem Header="Move category later"
+                                                              Click="MoveCategoryLaterMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Move this category later" />
+                                                    <Separator />
+                                                    <MenuItem Header="Delete category…"
+                                                              Click="DeleteCategoryMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Delete this category" />
+                                                </ContextMenu>
+                                            </Border.ContextMenu>
+                                            <Grid Height="32">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="26" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="ViewGlyph"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           FontFamily="{StaticResource IconFontFamily}"
+                                                           FontSize="13"
+                                                           Text="&#xE8B7;" />
+                                                <TextBlock Grid.Column="1"
+                                                           Margin="8,0,6,0"
+                                                           VerticalAlignment="Center"
+                                                           Text="{Binding DisplayName}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding DisplayName}" />
+                                                <Border x:Name="CountBadge"
+                                                        Grid.Column="2"
+                                                        Margin="0,0,6,0"
+                                                        Padding="7,1"
+                                                        VerticalAlignment="Center"
+                                                        Background="{StaticResource SurfaceRaisedBackgroundBrush}"
+                                                        CornerRadius="{StaticResource PillCornerRadius}"
+                                                        Visibility="{Binding SidebarCountVisibility, RelativeSource={RelativeSource AncestorType=Window}}">
+                                                    <TextBlock FontSize="{StaticResource FontSizeMicro}"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                                               Text="{Binding SoundCountText}" />
+                                                </Border>
+                                                <Border x:Name="DropHintBadge"
+                                                        Grid.Column="2"
+                                                        Margin="0,0,6,0"
+                                                        Padding="8,1"
+                                                        VerticalAlignment="Center"
+                                                        Background="{StaticResource AccentBrush}"
+                                                        CornerRadius="{StaticResource PillCornerRadius}"
+                                                        Visibility="Collapsed">
+                                                    <TextBlock FontSize="{StaticResource FontSizeMicro}"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource TextOnAccentBrush}"
+                                                               Text="Move here" />
+                                                </Border>
+                                            </Grid>
                                         </Border>
-                                    </Grid>
+                                    </StackPanel>
                                     <DataTemplate.Triggers>
                                         <DataTrigger Binding="{Binding Kind}" Value="AllSounds">
                                             <Setter TargetName="ViewGlyph" Property="Text" Value="&#xE767;" />
@@ -348,6 +488,15 @@
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding Kind}" Value="Uncategorized">
                                             <Setter TargetName="ViewGlyph" Property="Text" Value="&#xE7C3;" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding StartsUserCategorySection}" Value="True">
+                                            <Setter TargetName="SectionHeader" Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsDropTarget}" Value="True">
+                                            <Setter TargetName="ViewItemRoot" Property="Background" Value="{StaticResource AccentSubtleBrush}" />
+                                            <Setter TargetName="ViewItemRoot" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                            <Setter TargetName="CountBadge" Property="Visibility" Value="Collapsed" />
+                                            <Setter TargetName="DropHintBadge" Property="Visibility" Value="Visible" />
                                         </DataTrigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>
@@ -361,10 +510,11 @@
             <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <Border Padding="18,14,18,12"
+                <Border Padding="18,12,18,10"
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="0,0,0,1">
                     <Grid>
@@ -388,6 +538,24 @@
                                        VerticalAlignment="Center"
                                        Style="{StaticResource MutedTextStyle}"
                                        Text="0 sounds" />
+                            <ToggleButton x:Name="OrganizeToggleButton"
+                                          Margin="14,0,0,0"
+                                          Padding="10,5"
+                                          Checked="OrganizeToggleButton_Checked"
+                                          Unchecked="OrganizeToggleButton_Unchecked"
+                                          Style="{StaticResource SecondaryButtonStyle}"
+                                          ToolTip="Select several sounds to move or favorite them together"
+                                          AutomationProperties.Name="Organize sounds">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Margin="0,0,6,0"
+                                               VerticalAlignment="Center"
+                                               FontFamily="{StaticResource IconFontFamily}"
+                                               FontSize="12"
+                                               Text="&#xE762;" />
+                                    <TextBlock VerticalAlignment="Center"
+                                               Text="Organize" />
+                                </StackPanel>
+                            </ToggleButton>
                         </StackPanel>
 
                         <StackPanel Grid.Column="1"
@@ -452,7 +620,8 @@
                                                FontFamily="{StaticResource IconFontFamily}"
                                                FontSize="12"
                                                Text="&#xE8E5;" />
-                                    <TextBlock VerticalAlignment="Center"
+                                    <TextBlock x:Name="ImportButtonTextBlock"
+                                               VerticalAlignment="Center"
                                                FontWeight="SemiBold"
                                                Text="Import" />
                                 </StackPanel>
@@ -464,17 +633,94 @@
                                    Grid.ColumnSpan="2"
                                    Margin="0,8,0,0"
                                    Style="{StaticResource MutedTextStyle}"
-                                   Text="Drag the handle or use Move earlier / Move later." />
+                                   Text="Drag a tile onto a category to file it, or drag the handle to reorder." />
+                    </Grid>
+                </Border>
+
+                <!--
+                    Contextual command bar. It only exists while sounds are
+                    selected, and every command it offers also has a keyboard
+                    route through the tile context menu.
+                -->
+                <Border x:Name="SelectionCommandBar"
+                        Grid.Row="1"
+                        Padding="18,8"
+                        Background="{StaticResource AccentSubtleBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,0,0,1"
+                        Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock x:Name="SelectionCountTextBlock"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                   Text="0 sounds selected"
+                                   AutomationProperties.LiveSetting="Polite" />
+
+                        <StackPanel Grid.Column="2"
+                                    Orientation="Horizontal">
+                            <Button x:Name="MoveSelectionButton"
+                                    Padding="12,6"
+                                    Click="MoveSelectionButton_Click"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    ToolTip="Move every selected sound into one category"
+                                    AutomationProperties.Name="Move selected sounds to a category">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Margin="0,0,7,0"
+                                               VerticalAlignment="Center"
+                                               FontFamily="{StaticResource IconFontFamily}"
+                                               FontSize="12"
+                                               Text="&#xE8DE;" />
+                                    <TextBlock VerticalAlignment="Center"
+                                               Text="Move to category" />
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="FavoriteSelectionButton"
+                                    Margin="8,0,0,0"
+                                    Padding="12,6"
+                                    Click="FavoriteSelectionButton_Click"
+                                    Content="Add to favorites"
+                                    ToolTip="Mark every selected sound as a favorite"
+                                    AutomationProperties.Name="Add selected sounds to favorites" />
+                            <Button x:Name="UnfavoriteSelectionButton"
+                                    Margin="8,0,0,0"
+                                    Padding="12,6"
+                                    Click="UnfavoriteSelectionButton_Click"
+                                    Content="Remove from favorites"
+                                    ToolTip="Clear the favorite flag on every selected sound"
+                                    AutomationProperties.Name="Remove selected sounds from favorites" />
+                            <Button x:Name="SelectAllButton"
+                                    Margin="8,0,0,0"
+                                    Padding="12,6"
+                                    Click="SelectAllButton_Click"
+                                    Content="Select all"
+                                    ToolTip="Select every sound in this view (Ctrl+A)"
+                                    AutomationProperties.Name="Select all visible sounds" />
+                            <Button x:Name="CancelSelectionButton"
+                                    Margin="8,0,0,0"
+                                    Padding="12,6"
+                                    Click="CancelSelectionButton_Click"
+                                    Content="Cancel"
+                                    ToolTip="Leave organization mode (Escape)"
+                                    AutomationProperties.Name="Cancel selection" />
+                        </StackPanel>
                     </Grid>
                 </Border>
 
                 <Border x:Name="SoundboardDropArea"
-                        Grid.Row="1"
+                        Grid.Row="2"
                         AllowDrop="True"
                         Background="Transparent"
                         BorderBrush="Transparent"
                         BorderThickness="2"
                         Drop="SoundboardDropArea_Drop"
+                        DragLeave="SoundboardDropArea_DragLeave"
                         PreviewDragOver="SoundboardDropArea_PreviewDragOver">
                     <Grid>
 
@@ -525,7 +771,7 @@
 
                         <!-- Sound grid -->
                         <ScrollViewer x:Name="SoundGridScrollViewer"
-                                      Padding="12,12,6,12"
+                                      Padding="14,12,8,12"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
                             <ItemsControl x:Name="SoundTilesItemsControl"
@@ -545,22 +791,85 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Border x:Name="TileBorder"
-                                                Width="204"
-                                                Height="176"
-                                                Margin="0,0,12,12"
+                                                Width="188"
+                                                Height="116"
+                                                Margin="0,0,10,10"
                                                 AllowDrop="True"
                                                 Background="{StaticResource TileBackgroundBrush}"
                                                 BorderBrush="{StaticResource BorderBrush}"
                                                 BorderThickness="1"
                                                 CornerRadius="{StaticResource SurfaceCornerRadius}"
+                                                DragLeave="SoundTile_DragLeave"
                                                 DragOver="SoundTile_DragOver"
                                                 Drop="SoundTile_Drop"
+                                                PreviewMouseLeftButtonDown="SoundTile_PreviewMouseLeftButtonDown"
+                                                PreviewMouseMove="SoundTile_PreviewMouseMove"
                                                 SnapsToDevicePixels="True"
-                                                Tag="{Binding}"
-                                                ToolTip="{Binding DisplayName}">
+                                                Tag="{Binding}">
+                                            <Border.ToolTip>
+                                                <ToolTip>
+                                                    <StackPanel MaxWidth="300">
+                                                        <TextBlock FontWeight="SemiBold"
+                                                                   Text="{Binding DisplayName}"
+                                                                   TextWrapping="Wrap" />
+                                                        <TextBlock Margin="0,3,0,0"
+                                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                                   Text="{Binding TileDetailText}"
+                                                                   TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                </ToolTip>
+                                            </Border.ToolTip>
+                                            <Border.ContextMenu>
+                                                <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                    <MenuItem x:Name="MoveToCategoryMenuItem"
+                                                              Header="Move to"
+                                                              SubmenuOpened="MoveToCategoryMenuItem_SubmenuOpened"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Move this sound to a category">
+                                                        <MenuItem Header="Loading…" IsEnabled="False" />
+                                                    </MenuItem>
+                                                    <MenuItem Header="{Binding FavoriteActionText}"
+                                                              Click="FavoriteTileButton_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="{Binding FavoriteActionText}" />
+                                                    <Separator />
+                                                    <MenuItem Header="Edit sound…"
+                                                              Click="EditTileButton_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Edit sound metadata" />
+                                                    <MenuItem Header="Edit clip…"
+                                                              Click="EditClipTileButton_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Edit sound clip" />
+                                                    <MenuItem Header="Assign hotkey…"
+                                                              Click="AssignTileHotkeyButton_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Assign or change sound hotkey" />
+                                                    <Separator />
+                                                    <MenuItem Header="Select this sound"
+                                                              Click="SelectTileMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Select this sound for organization" />
+                                                    <MenuItem Header="Move earlier"
+                                                              IsEnabled="{Binding CanReorder}"
+                                                              Click="MoveSoundEarlierMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Move sound earlier" />
+                                                    <MenuItem Header="Move later"
+                                                              IsEnabled="{Binding CanReorder}"
+                                                              Click="MoveSoundLaterMenuItem_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Move sound later" />
+                                                    <Separator />
+                                                    <MenuItem Header="Remove sound…"
+                                                              Click="RemoveTileButton_Click"
+                                                              Tag="{Binding}"
+                                                              AutomationProperties.Name="Remove sound" />
+                                                </ContextMenu>
+                                            </Border.ContextMenu>
                                             <Grid>
                                                 <Grid.RowDefinitions>
-                                                    <RowDefinition Height="4" />
+                                                    <RowDefinition Height="3" />
                                                     <RowDefinition Height="*" />
                                                 </Grid.RowDefinitions>
 
@@ -570,88 +879,103 @@
 
                                                 <Grid Grid.Row="1">
 
-                                                    <!-- Primary surface: play / restart -->
+                                                    <!-- Primary surface: play / restart, or select while organizing -->
                                                     <Button x:Name="PlaySurface"
                                                             Click="PlayTileButton_Click"
                                                             Style="{StaticResource TileSurfaceButtonStyle}"
                                                             Tag="{Binding}"
                                                             AutomationProperties.Name="{Binding TileAutomationName}"
-                                                            AutomationProperties.HelpText="Activate to play this sound from the start.">
-                                                        <Grid Margin="12,10,12,10">
+                                                            AutomationProperties.HelpText="{Binding PrimaryActionHelpText}">
+                                                        <Grid Margin="10,8,10,8">
                                                             <Grid.RowDefinitions>
-                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="28" />
                                                                 <RowDefinition Height="Auto" />
                                                                 <RowDefinition Height="Auto" />
                                                                 <RowDefinition Height="*" />
                                                                 <RowDefinition Height="Auto" />
                                                             </Grid.RowDefinitions>
 
-                                                            <Grid Width="34"
-                                                                  Height="34"
+                                                            <Grid Width="28"
+                                                                  Height="28"
                                                                   HorizontalAlignment="Left">
                                                                 <Border x:Name="IconSurface"
                                                                         Background="{Binding Background, ElementName=AccentSource}"
-                                                                        CornerRadius="10"
+                                                                        CornerRadius="9"
                                                                         Opacity="0.22" />
                                                                 <TextBlock x:Name="PlayGlyph"
                                                                            HorizontalAlignment="Center"
                                                                            VerticalAlignment="Center"
                                                                            FontFamily="{StaticResource IconFontFamily}"
-                                                                           FontSize="14"
+                                                                           FontSize="13"
                                                                            Foreground="{StaticResource TextPrimaryBrush}"
                                                                            Text="&#xE768;" />
+                                                                <Border x:Name="SelectionIndicator"
+                                                                        Background="{StaticResource SurfaceRaisedBackgroundBrush}"
+                                                                        BorderBrush="{StaticResource BorderStrongBrush}"
+                                                                        BorderThickness="1"
+                                                                        CornerRadius="9"
+                                                                        SnapsToDevicePixels="True"
+                                                                        Visibility="Collapsed">
+                                                                    <TextBlock x:Name="SelectionGlyph"
+                                                                               HorizontalAlignment="Center"
+                                                                               VerticalAlignment="Center"
+                                                                               FontFamily="{StaticResource IconFontFamily}"
+                                                                               FontSize="12"
+                                                                               Foreground="{StaticResource TextOnAccentBrush}"
+                                                                               Text="&#xE73E;"
+                                                                               Visibility="Collapsed" />
+                                                                </Border>
                                                             </Grid>
 
                                                             <TextBlock Grid.Row="1"
-                                                                       Margin="0,10,0,0"
+                                                                       Margin="0,8,0,0"
                                                                        FontSize="{StaticResource FontSizeBody}"
                                                                        FontWeight="SemiBold"
                                                                        Foreground="{StaticResource TextPrimaryBrush}"
                                                                        Text="{Binding DisplayName}"
-                                                                       TextTrimming="CharacterEllipsis" />
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       TextWrapping="NoWrap" />
 
                                                             <TextBlock Grid.Row="2"
-                                                                       Margin="0,3,0,0"
-                                                                       FontSize="{StaticResource FontSizeCaption}"
+                                                                       Margin="0,2,0,0"
+                                                                       FontSize="{StaticResource FontSizeMicro}"
                                                                        Foreground="{StaticResource TextMutedBrush}"
-                                                                       TextTrimming="CharacterEllipsis">
-                                                                <Run Text="{Binding DurationText, Mode=OneWay}" />
-                                                                <Run Text="·" />
-                                                                <Run Text="{Binding FormatLabel, Mode=OneWay}" />
-                                                            </TextBlock>
+                                                                       Text="{Binding MetaText}"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       TextWrapping="NoWrap" />
 
-                                                            <WrapPanel Grid.Row="4">
-                                                                <Border Margin="0,3,5,0"
-                                                                        Style="{StaticResource KeyCapChipStyle}"
+                                                            <StackPanel Grid.Row="4"
+                                                                        ClipToBounds="True"
+                                                                        Orientation="Horizontal">
+                                                                <Border Style="{StaticResource TileChipStyle}"
                                                                         Visibility="{Binding HasHotkey, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                                                    <TextBlock MaxWidth="120"
-                                                                               Style="{StaticResource KeyCapTextStyle}"
+                                                                    <TextBlock MaxWidth="86"
+                                                                               Style="{StaticResource TileChipTextStyle}"
                                                                                Text="{Binding HotkeyDisplayText}"
                                                                                ToolTip="{Binding HotkeyStateText}" />
                                                                 </Border>
-                                                                <Border x:Name="PlayingBadge"
-                                                                        Margin="0,3,5,0"
-                                                                        Padding="7,2"
-                                                                        Background="{StaticResource PlayingSubtleBrush}"
-                                                                        BorderBrush="{StaticResource PlayingBrush}"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="4"
-                                                                        Visibility="Collapsed">
-                                                                    <TextBlock Foreground="{StaticResource PlayingBrush}"
-                                                                               Style="{StaticResource TileBadgeTextStyle}"
-                                                                               Text="Playing" />
+                                                                <Border Style="{StaticResource TileChipStyle}"
+                                                                        Visibility="{Binding ShowCategoryChip, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                                    <StackPanel Orientation="Horizontal">
+                                                                        <TextBlock Margin="0,0,4,0"
+                                                                                   VerticalAlignment="Center"
+                                                                                   FontFamily="{StaticResource IconFontFamily}"
+                                                                                   FontSize="9"
+                                                                                   Foreground="{StaticResource TextMutedBrush}"
+                                                                                   Text="&#xE8B7;" />
+                                                                        <TextBlock MaxWidth="78"
+                                                                                   Style="{StaticResource TileChipTextStyle}"
+                                                                                   Text="{Binding CategoryName}"
+                                                                                   ToolTip="{Binding CategoryChipAutomationName}" />
+                                                                    </StackPanel>
                                                                 </Border>
-                                                                <Border Margin="0,3,5,0"
-                                                                        Padding="7,2"
-                                                                        BorderBrush="{StaticResource BorderStrongBrush}"
-                                                                        BorderThickness="1"
-                                                                        CornerRadius="4"
+                                                                <Border Style="{StaticResource TileChipStyle}"
                                                                         Visibility="{Binding HasClipEdits, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                                                    <TextBlock Foreground="{StaticResource TextSecondaryBrush}"
-                                                                               Style="{StaticResource TileBadgeTextStyle}"
-                                                                               Text="{Binding EditedStateText}" />
+                                                                    <TextBlock Style="{StaticResource TileChipTextStyle}"
+                                                                               Text="{Binding EditedStateText}"
+                                                                               ToolTip="This sound has trim or fade edits" />
                                                                 </Border>
-                                                            </WrapPanel>
+                                                            </StackPanel>
                                                         </Grid>
                                                     </Button>
 
@@ -660,73 +984,35 @@
                                                         siblings, never nested inside it, so a click on
                                                         one can never fall through to playback.
                                                     -->
-                                                    <StackPanel Margin="0,6,6,0"
+                                                    <StackPanel x:Name="TileActions"
+                                                                Margin="0,6,6,0"
                                                                 HorizontalAlignment="Right"
                                                                 VerticalAlignment="Top"
                                                                 Orientation="Horizontal"
-                                                                Panel.ZIndex="1">
+                                                                Panel.ZIndex="1"
+                                                                Visibility="Collapsed">
                                                         <Button x:Name="DragHandle"
-                                                                Width="26"
-                                                                Height="26"
                                                                 Content="&#xE700;"
-                                                                IsEnabled="{Binding CanReorder}"
                                                                 PreviewMouseLeftButtonDown="SoundDragHandle_PreviewMouseLeftButtonDown"
                                                                 PreviewMouseMove="SoundDragHandle_PreviewMouseMove"
-                                                                Style="{StaticResource IconButtonStyle}"
+                                                                Style="{StaticResource TileActionButtonStyle}"
                                                                 Tag="{Binding}"
                                                                 ToolTip="{Binding ReorderAvailabilityText}"
-                                                                AutomationProperties.Name="Drag to reorder sound" />
+                                                                AutomationProperties.Name="Drag to reorder or to move into a category" />
                                                         <Button x:Name="FavoriteButton"
-                                                                Width="26"
-                                                                Height="26"
                                                                 Click="FavoriteTileButton_Click"
                                                                 Content="&#xE734;"
-                                                                Style="{StaticResource IconButtonStyle}"
+                                                                Style="{StaticResource TileActionButtonStyle}"
                                                                 Tag="{Binding}"
                                                                 ToolTip="{Binding FavoriteActionText}"
                                                                 AutomationProperties.Name="{Binding FavoriteActionText}" />
                                                         <Button x:Name="OverflowButton"
-                                                                Width="26"
-                                                                Height="26"
                                                                 Click="SoundOverflowButton_Click"
                                                                 Content="&#xE712;"
-                                                                Style="{StaticResource IconButtonStyle}"
+                                                                Style="{StaticResource TileActionButtonStyle}"
                                                                 Tag="{Binding}"
-                                                                ToolTip="More actions"
-                                                                AutomationProperties.Name="{Binding DisplayName, StringFormat=More actions for {0}}">
-                                                            <Button.ContextMenu>
-                                                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                                                                    <MenuItem Header="Edit sound…"
-                                                                              Click="EditTileButton_Click"
-                                                                              Tag="{Binding}"
-                                                                              AutomationProperties.Name="Edit sound metadata" />
-                                                                    <MenuItem Header="Edit clip…"
-                                                                              Click="EditClipTileButton_Click"
-                                                                              Tag="{Binding}"
-                                                                              AutomationProperties.Name="Edit sound clip" />
-                                                                    <MenuItem Header="Assign hotkey…"
-                                                                              Click="AssignTileHotkeyButton_Click"
-                                                                              Tag="{Binding}"
-                                                                              AutomationProperties.Name="Assign or change sound hotkey" />
-                                                                    <Separator />
-                                                                    <MenuItem Header="Move earlier"
-                                                                              IsEnabled="{Binding CanReorder}"
-                                                                              Click="MoveSoundEarlierMenuItem_Click"
-                                                                              Tag="{Binding}"
-                                                                              AutomationProperties.Name="Move sound earlier" />
-                                                                    <MenuItem Header="Move later"
-                                                                              IsEnabled="{Binding CanReorder}"
-                                                                              Click="MoveSoundLaterMenuItem_Click"
-                                                                              Tag="{Binding}"
-                                                                              AutomationProperties.Name="Move sound later" />
-                                                                    <Separator />
-                                                                    <MenuItem Header="Remove sound…"
-                                                                              Click="RemoveTileButton_Click"
-                                                                              Tag="{Binding}"
-                                                                              AutomationProperties.Name="Remove sound" />
-                                                                </ContextMenu>
-                                                            </Button.ContextMenu>
-                                                        </Button>
+                                                                ToolTip="More actions — move to a category, edit, hotkey, remove"
+                                                                AutomationProperties.Name="{Binding DisplayName, StringFormat=More actions for {0}}" />
                                                     </StackPanel>
                                                 </Grid>
                                             </Grid>
@@ -738,14 +1024,8 @@
                                                         Property="BorderBrush"
                                                         Value="{StaticResource PlayingBrush}" />
                                                 <Setter TargetName="TileBorder"
-                                                        Property="BorderThickness"
-                                                        Value="2" />
-                                                <Setter TargetName="TileBorder"
                                                         Property="Background"
                                                         Value="{StaticResource PlayingSubtleBrush}" />
-                                                <Setter TargetName="PlayingBadge"
-                                                        Property="Visibility"
-                                                        Value="Visible" />
                                                 <Setter TargetName="PlayGlyph"
                                                         Property="Text"
                                                         Value="&#xE72C;" />
@@ -763,7 +1043,49 @@
                                                 <Setter TargetName="FavoriteButton"
                                                         Property="Foreground"
                                                         Value="{StaticResource WarningBrush}" />
+                                                <Setter TargetName="TileActions"
+                                                        Property="Visibility"
+                                                        Value="Visible" />
                                             </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsSelectionMode}" Value="True">
+                                                <Setter TargetName="SelectionIndicator"
+                                                        Property="Visibility"
+                                                        Value="Visible" />
+                                                <Setter TargetName="DragHandle"
+                                                        Property="IsEnabled"
+                                                        Value="False" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                <Setter TargetName="TileBorder"
+                                                        Property="BorderBrush"
+                                                        Value="{StaticResource AccentBrush}" />
+                                                <Setter TargetName="TileBorder"
+                                                        Property="Background"
+                                                        Value="{StaticResource AccentSubtleBrush}" />
+                                                <Setter TargetName="SelectionIndicator"
+                                                        Property="Background"
+                                                        Value="{StaticResource AccentBrush}" />
+                                                <Setter TargetName="SelectionIndicator"
+                                                        Property="BorderBrush"
+                                                        Value="{StaticResource AccentBrush}" />
+                                                <Setter TargetName="SelectionGlyph"
+                                                        Property="Visibility"
+                                                        Value="Visible" />
+                                            </DataTrigger>
+                                            <Trigger SourceName="TileBorder"
+                                                     Property="IsMouseOver"
+                                                     Value="True">
+                                                <Setter TargetName="TileActions"
+                                                        Property="Visibility"
+                                                        Value="Visible" />
+                                            </Trigger>
+                                            <Trigger SourceName="TileBorder"
+                                                     Property="IsKeyboardFocusWithin"
+                                                     Value="True">
+                                                <Setter TargetName="TileActions"
+                                                        Property="Visibility"
+                                                        Value="Visible" />
+                                            </Trigger>
                                             <Trigger SourceName="PlaySurface"
                                                      Property="IsMouseOver"
                                                      Value="True">
@@ -786,6 +1108,61 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+
+                        <!--
+                            Undo strip for the most recent category move. It
+                            floats over the grid so a move never pushes the
+                            tiles the user is still working with.
+                        -->
+                        <Border x:Name="UndoNotificationBar"
+                                Margin="18"
+                                Padding="14,9"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Bottom"
+                                Background="{StaticResource SurfaceRaisedBackgroundBrush}"
+                                BorderBrush="{StaticResource BorderStrongBrush}"
+                                BorderThickness="1"
+                                CornerRadius="{StaticResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True"
+                                Visibility="Collapsed">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="16"
+                                                  Direction="270"
+                                                  Opacity="0.45"
+                                                  ShadowDepth="3"
+                                                  Color="#FF05070B" />
+                            </Border.Effect>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Margin="0,0,10,0"
+                                           VerticalAlignment="Center"
+                                           FontFamily="{StaticResource IconFontFamily}"
+                                           FontSize="13"
+                                           Foreground="{StaticResource SuccessBrush}"
+                                           Text="&#xE73E;" />
+                                <TextBlock x:Name="UndoNotificationTextBlock"
+                                           MaxWidth="360"
+                                           VerticalAlignment="Center"
+                                           Text="Moved to Songs"
+                                           TextTrimming="CharacterEllipsis"
+                                           AutomationProperties.LiveSetting="Polite" />
+                                <Button x:Name="UndoActionButton"
+                                        Margin="14,0,0,0"
+                                        Padding="12,5"
+                                        Click="UndoActionButton_Click"
+                                        Content="Undo"
+                                        ToolTip="Put the moved sounds back where they were"
+                                        AutomationProperties.Name="Undo the last move" />
+                                <Button x:Name="DismissUndoButton"
+                                        Margin="6,0,0,0"
+                                        Width="28"
+                                        Height="28"
+                                        Click="DismissUndoButton_Click"
+                                        Content="&#xE711;"
+                                        Style="{StaticResource IconButtonStyle}"
+                                        ToolTip="Dismiss"
+                                        AutomationProperties.Name="Dismiss this notification" />
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>

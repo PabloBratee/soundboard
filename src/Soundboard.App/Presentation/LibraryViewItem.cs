@@ -23,6 +23,8 @@ public enum SoundLibraryViewKind
 public sealed class LibraryViewItem : INotifyPropertyChanged
 {
     private int soundCount;
+    private bool isDropTarget;
+    private bool startsUserCategorySection;
 
     public LibraryViewItem(
         SoundLibraryViewKind kind,
@@ -44,6 +46,60 @@ public sealed class LibraryViewItem : INotifyPropertyChanged
 
     public bool IsUserCategory =>
         Kind == SoundLibraryViewKind.Category;
+
+    /// <summary>
+    /// Views that represent a real category assignment. Dropping sounds here
+    /// has an unambiguous meaning; All Sounds and Favorites do not, so they
+    /// reject sound drops instead of guessing.
+    /// </summary>
+    public bool AcceptsSoundDrops =>
+        Kind is SoundLibraryViewKind.Category
+            or SoundLibraryViewKind.Uncategorized;
+
+    /// <summary>
+    /// Views that name an import destination. Favorites is excluded because
+    /// importing cannot make a sound a favorite.
+    /// </summary>
+    public bool AcceptsFileDrops =>
+        Kind is not SoundLibraryViewKind.Favorites;
+
+    /// <summary>
+    /// Set while a drag hovers this view so the sidebar can show the target
+    /// clearly. Purely transient presentation state.
+    /// </summary>
+    public bool IsDropTarget
+    {
+        get => isDropTarget;
+        set
+        {
+            if (isDropTarget == value)
+            {
+                return;
+            }
+
+            isDropTarget = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// True for the first user category, which draws the divider that keeps
+    /// built-in views visually separate from user-created categories.
+    /// </summary>
+    public bool StartsUserCategorySection
+    {
+        get => startsUserCategorySection;
+        set
+        {
+            if (startsUserCategorySection == value)
+            {
+                return;
+            }
+
+            startsUserCategorySection = value;
+            OnPropertyChanged();
+        }
+    }
 
     /// <summary>
     /// Number of sounds this view currently contains, ignoring any search.

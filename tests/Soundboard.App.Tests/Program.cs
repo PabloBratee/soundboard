@@ -40,6 +40,8 @@ internal static class Program
                 Path.Combine(testRoot, "empty-library"));
             await RunImportAndSearchTestsAsync(
                 Path.Combine(testRoot, "import"));
+            await RunOrganizationWorkflowTestsAsync(
+                Path.Combine(testRoot, "organization-workflow"));
             await RunInvalidMetadataFallbackTestAsync(
                 Path.Combine(testRoot, "invalid-metadata"));
             await RunFormatMetadataFallbackAndFutureSchemaTestAsync(
@@ -688,6 +690,490 @@ internal static class Program
         Console.WriteLine(
             "PASS import defaults, duplicate detection, search, filtering, "
             + "and hidden-sound hotkey metadata");
+    }
+
+    /// <summary>
+    /// Covers the organization workflow end to end at the layer the UI calls:
+    /// dragging one sound onto a category, bulk-moving a keyboard selection,
+    /// undoing, importing into a destination, and category management.
+    /// </summary>
+    private static async Task RunOrganizationWorkflowTestsAsync(string root)
+    {
+        var sources = Path.Combine(root, "Sources");
+        Directory.CreateDirectory(sources);
+        var sourcePaths = new List<string>();
+        for (var index = 0; index < 5; index++)
+        {
+            var sourcePath = Path.Combine(sources, $"clip-{index}.wav");
+            WriteDistinctTestWave(sourcePath, index + 1);
+            sourcePaths.Add(sourcePath);
+        }
+
+        await using var store = new SoundLibraryStore(root);
+        _ = await store.LoadAsync();
+        var gaming = await store.CreateCategoryAsync("Gaming");
+        var songs = await store.CreateCategoryAsync("Songs");
+
+        // ---- Importing into a chosen destination --------------------------
+        var gamingImport = await store.ImportAsync(
+            sourcePaths.Take(3),
+            gaming.Id);
+        AssertEqual(
+            3,
+            gamingImport.Imported.Count,
+            "import into the active category");
+        AssertTrue(
+            gamingImport.Imported.All(
+                sound => sound.CategoryId == gaming.Id),
+            "imported sounds land in the active category");
+
+        // Dropping files onto a sidebar category uses the same import path,
+        // including validation, hashing, and duplicate detection.
+        var songsImport = await store.ImportAsync(
+            sourcePaths.Skip(3),
+            songs.Id);
+        AssertEqual(
+            2,
+            songsImport.Imported.Count,
+            "import onto a sidebar category");
+        AssertTrue(
+            songsImport.Imported.All(sound => sound.CategoryId == songs.Id),
+            "files dropped on a category land in that category");
+        var duplicateDrop = await store.ImportAsync(
+            sourcePaths.Take(1),
+            songs.Id);
+        AssertEqual(
+            0,
+            duplicateDrop.Imported.Count,
+            "duplicate detection still applies to a category drop");
+        AssertEqual(
+            1,
+            duplicateDrop.Duplicates.Count,
+            "a duplicate dropped on a category is reported");
+
+        var alpha = gamingImport.Imported[0].Id;
+        var bravo = gamingImport.Imported[1].Id;
+        var charlie = gamingImport.Imported[2].Id;
+        var delta = songsImport.Imported[0].Id;
+        var echo = songsImport.Imported[1].Id;
+
+        var hotkey = new HotkeyGesture(
+            0x51,
+            HotkeyModifiers.Control | HotkeyModifiers.Shift,
+            "Ctrl + Shift + Q");
+        await store.UpdateHotkeyAsync(alpha, hotkey);
+        await store.UpdateSoundAsync(
+            alpha,
+            new SoundMetadataUpdate(
+                "Alpha",
+                gaming.Id,
+                true,
+                SoundTileAccent.Teal,
+                63d));
+        await store.UpdateClipSettingsAsync(
+            alpha,
+            new SoundClipMetadataUpdate(10, 900, 5, 7));
+
+        var orderBeforeMove = (await store.LoadAsync()).Sounds
+            .Select(sound => sound.Id)
+            .ToArray();
+        AssertSequence(
+            [alpha, bravo, charlie, delta, echo],
+            orderBeforeMove,
+            "imports keep their arrival order");
+
+        // ---- Dragging one sound onto a category ---------------------------
+        var singleMove = await store.MoveToCategoryAsync([alpha], songs.Id);
+        AssertEqual(1, singleMove.MovedCount, "single drag move count");
+        var movedAlpha = singleMove.Sounds.Single(sound => sound.Id == alpha);
+        AssertEqual(
+            songs.Id,
+            movedAlpha.CategoryId,
+            "a dragged sound lands in the drop target");
+        AssertEqual(hotkey, movedAlpha.Hotkey, "a move preserves the hotkey");
+        AssertTrue(movedAlpha.IsFavorite, "a move preserves the favorite flag");
+        AssertEqual(
+            SoundTileAccent.Teal,
+            movedAlpha.TileAccent,
+            "a move preserves the tile accent");
+        AssertEqual(
+            63d,
+            movedAlpha.VolumePercent,
+            "a move preserves the per-sound volume");
+        AssertEqual(
+            10,
+            movedAlpha.TrimStartMilliseconds,
+            "a move preserves the trim start");
+        AssertEqual(
+            900,
+            movedAlpha.TrimEndMilliseconds,
+            "a move preserves the trim end");
+        AssertEqual(
+            5,
+            movedAlpha.FadeInMilliseconds,
+            "a move preserves the fade in");
+        AssertEqual(
+            7,
+            movedAlpha.FadeOutMilliseconds,
+            "a move preserves the fade out");
+        AssertEqual(
+            "Alpha",
+            movedAlpha.DisplayName,
+            "a move preserves the display name");
+        AssertSequence(
+            [bravo, charlie, delta, echo, alpha],
+            singleMove.Sounds.Select(sound => sound.Id),
+            "a moved sound is appended to its destination category");
+        AssertSequence(
+            [0, 1, 2, 3, 4],
+            singleMove.Sounds.Select(sound => sound.SortOrder),
+            "a move renumbers the library order deterministically");
+
+        await using (var reopened = new SoundLibraryStore(root))
+        {
+            var persisted = await reopened.LoadAsync();
+            AssertEqual(
+                songs.Id,
+                persisted.Sounds.Single(sound => sound.Id == alpha)
+                    .CategoryId,
+                "a quick move persists without a separate save step");
+            AssertSequence(
+                [bravo, charlie, delta, echo, alpha],
+                persisted.Sounds.Select(sound => sound.Id),
+                "the order after a move persists");
+        }
+
+        // ---- Counts, filtering, and search stay correct -------------------
+        var gamingView = new LibraryViewItem(
+            SoundLibraryViewKind.Category,
+            "Gaming",
+            gaming.Id);
+        var songsView = new LibraryViewItem(
+            SoundLibraryViewKind.Category,
+            "Songs",
+            songs.Id);
+        var favoritesView = new LibraryViewItem(
+            SoundLibraryViewKind.Favorites,
+            "Favorites");
+        var uncategorizedView = new LibraryViewItem(
+            SoundLibraryViewKind.Uncategorized,
+            "Uncategorized");
+        var views = new[]
+        {
+            gamingView,
+            songsView,
+            favoritesView,
+            uncategorizedView
+        };
+        void ApplyCounts(IReadOnlyList<SoundLibraryEntry> sounds)
+        {
+            foreach (var view in views)
+            {
+                view.SoundCount = sounds.Count(
+                    sound => SoundLibraryFilter.MatchesView(sound, view));
+            }
+        }
+
+        ApplyCounts(singleMove.Sounds);
+        AssertEqual(
+            2,
+            gamingView.SoundCount,
+            "the source category count drops immediately");
+        AssertEqual(
+            3,
+            songsView.SoundCount,
+            "the destination category count rises immediately");
+        AssertEqual(
+            "2",
+            gamingView.SoundCountText,
+            "the sidebar count text follows the count");
+        AssertEqual(
+            1,
+            favoritesView.SoundCount,
+            "Favorites is unaffected by a category move");
+        AssertTrue(
+            !SoundLibraryFilter.MatchesView(movedAlpha, gamingView),
+            "a moved sound leaves the view it was displayed in");
+        AssertTrue(
+            SoundLibraryFilter.MatchesView(movedAlpha, songsView),
+            "a moved sound appears in its new view");
+        AssertTrue(
+            SoundLibraryFilter.MatchesSearch(movedAlpha, "Songs", "songs"),
+            "search matches the new category name");
+        AssertTrue(
+            !SoundLibraryFilter.MatchesSearch(movedAlpha, "Songs", "gaming"),
+            "search no longer matches the old category name");
+        AssertTrue(
+            gamingView.AcceptsSoundDrops
+            && uncategorizedView.AcceptsSoundDrops
+            && !favoritesView.AcceptsSoundDrops,
+            "only views with an unambiguous category accept sound drops");
+        AssertTrue(
+            gamingView.AcceptsFileDrops
+            && uncategorizedView.AcceptsFileDrops
+            && !favoritesView.AcceptsFileDrops,
+            "Favorites is not an import destination");
+
+        // ---- Undo ---------------------------------------------------------
+        var undone = await store.RestoreCategoryAssignmentsAsync(
+            singleMove.Undo);
+        AssertEqual(
+            gaming.Id,
+            undone.Single(sound => sound.Id == alpha).CategoryId,
+            "undo restores the previous category");
+        AssertSequence(
+            orderBeforeMove,
+            undone.Select(sound => sound.Id),
+            "undo restores the previous order");
+
+        // ---- Keyboard selection and the bulk command bar ------------------
+        var selection = new LibrarySelectionState();
+        var visibleSoundIds = undone.Select(sound => sound.Id).ToArray();
+        AssertTrue(
+            !selection.IsActive,
+            "organization mode starts inactive");
+        selection.ApplyClick(
+            visibleSoundIds,
+            bravo,
+            extend: false,
+            range: false);
+        AssertTrue(
+            selection.IsActive,
+            "selecting a tile enters organization mode");
+        selection.ApplyClick(
+            visibleSoundIds,
+            delta,
+            extend: false,
+            range: true);
+        AssertSequence(
+            [bravo, charlie, delta],
+            selection.InVisualOrder(visibleSoundIds),
+            "Shift+click selects a range in grid order");
+        selection.ApplyClick(
+            visibleSoundIds,
+            charlie,
+            extend: true,
+            range: false);
+        AssertSequence(
+            [bravo, delta],
+            selection.InVisualOrder(visibleSoundIds),
+            "Ctrl+click removes a single sound from the selection");
+        selection.SelectAll(visibleSoundIds);
+        AssertEqual(
+            5,
+            selection.Count,
+            "select all covers every visible sound");
+        AssertEqual(
+            "5 sounds selected",
+            selection.SelectionCountText,
+            "the command bar reports the selected count");
+        selection.Clear();
+        selection.ApplyClick(
+            visibleSoundIds,
+            bravo,
+            extend: false,
+            range: false);
+        selection.ApplyClick(
+            visibleSoundIds,
+            delta,
+            extend: true,
+            range: false);
+        var bulkSoundIds = selection.InVisualOrder(visibleSoundIds);
+        AssertSequence(
+            [bravo, delta],
+            bulkSoundIds,
+            "a bulk command acts on the selection in grid order");
+
+        var jsonBeforeBulkMove = await File.ReadAllTextAsync(
+            store.LibraryFilePath);
+        var bulkMove = await store.MoveToCategoryAsync(bulkSoundIds, null);
+        AssertEqual(2, bulkMove.MovedCount, "bulk move count");
+        AssertTrue(
+            bulkMove.Sounds
+                .Where(sound => sound.Id == bravo || sound.Id == delta)
+                .All(sound => sound.CategoryId is null),
+            "a bulk move sends every selected sound to one destination");
+        ApplyCounts(bulkMove.Sounds);
+        AssertEqual(
+            2,
+            uncategorizedView.SoundCount,
+            "Uncategorized reflects a bulk move immediately");
+
+        var bulkUndone = await store.RestoreCategoryAssignmentsAsync(
+            bulkMove.Undo);
+        AssertEqual(
+            gaming.Id,
+            bulkUndone.Single(sound => sound.Id == bravo).CategoryId,
+            "undo restores each sound's own previous category");
+        AssertEqual(
+            songs.Id,
+            bulkUndone.Single(sound => sound.Id == delta).CategoryId,
+            "undo restores a mixed selection correctly");
+        AssertEqual(
+            jsonBeforeBulkMove,
+            await File.ReadAllTextAsync(store.LibraryFilePath),
+            "undoing a bulk move returns the library file to its prior state");
+
+        var noOpMove = await store.MoveToCategoryAsync([bravo], gaming.Id);
+        AssertEqual(
+            0,
+            noOpMove.MovedCount,
+            "moving a sound into the category it already has changes nothing");
+        AssertTrue(
+            !noOpMove.Undo.CanUndo,
+            "a move that changed nothing offers no undo");
+
+        var jsonBeforeFailure = await File.ReadAllTextAsync(
+            store.LibraryFilePath);
+        await AssertThrowsAsync<KeyNotFoundException>(
+            () => store.MoveToCategoryAsync(
+                [bravo, Guid.NewGuid()],
+                songs.Id),
+            "a bulk move naming a missing sound is rejected");
+        AssertEqual(
+            jsonBeforeFailure,
+            await File.ReadAllTextAsync(store.LibraryFilePath),
+            "a rejected bulk move writes nothing at all");
+
+        // ---- Bulk favorite -------------------------------------------------
+        var favorited = await store.SetFavoriteAsync([bravo, charlie], true);
+        AssertTrue(
+            favorited
+                .Where(sound => sound.Id == bravo || sound.Id == charlie)
+                .All(sound => sound.IsFavorite),
+            "the command bar can favorite several sounds at once");
+        ApplyCounts(favorited);
+        AssertEqual(
+            3,
+            favoritesView.SoundCount,
+            "Favorites reflects a bulk favorite immediately");
+        var unfavorited = await store.SetFavoriteAsync(
+            [bravo, charlie],
+            false);
+        AssertTrue(
+            unfavorited
+                .Where(sound => sound.Id == bravo || sound.Id == charlie)
+                .All(sound => !sound.IsFavorite),
+            "the command bar can clear favorites again");
+
+        // ---- Category management -------------------------------------------
+        var renamedCategory = await store.RenameCategoryAsync(
+            songs.Id,
+            "Music");
+        AssertEqual(
+            "Music",
+            renamedCategory.DisplayName,
+            "the inline field renames a category");
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => store.RenameCategoryAsync(gaming.Id, "music"),
+            "renaming to an existing name is rejected");
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => store.CreateCategoryAsync("Favorites"),
+            "built-in view names stay reserved");
+
+        var managedFilesBeforeDelete = Directory
+            .GetFiles(store.SoundsPath)
+            .Order()
+            .ToArray();
+        var deletion = await store.DeleteCategoryAsync(songs.Id);
+        AssertEqual(
+            5,
+            deletion.Sounds.Count,
+            "deleting a category removes no sounds");
+        AssertTrue(
+            deletion.Sounds
+                .Where(sound => sound.Id == delta || sound.Id == echo)
+                .All(sound => sound.CategoryId is null),
+            "sounds from a deleted category move to Uncategorized");
+        AssertSequence(
+            managedFilesBeforeDelete,
+            Directory.GetFiles(store.SoundsPath).Order(),
+            "deleting a category deletes no audio file");
+
+        await using (var restarted = new SoundLibraryStore(root))
+        {
+            var persisted = await restarted.LoadAsync();
+            AssertEqual(
+                5,
+                persisted.Sounds.Count,
+                "the library survives a restart");
+            AssertEqual(
+                1,
+                persisted.Categories.Count,
+                "the remaining categories survive a restart");
+            var persistedAlpha = persisted.Sounds.Single(
+                sound => sound.Id == alpha);
+            AssertEqual(
+                gaming.Id,
+                persistedAlpha.CategoryId,
+                "a category assignment survives a restart");
+            AssertEqual(
+                hotkey,
+                persistedAlpha.Hotkey,
+                "a hotkey survives the organization workflow");
+            AssertEqual(
+                63d,
+                persistedAlpha.VolumePercent,
+                "a per-sound volume survives the organization workflow");
+            AssertEqual(
+                10,
+                persistedAlpha.TrimStartMilliseconds,
+                "a trim survives the organization workflow");
+            AssertEqual(
+                SoundTileAccent.Teal,
+                persistedAlpha.TileAccent,
+                "a tile accent survives the organization workflow");
+        }
+
+        var pruning = new LibrarySelectionState();
+        pruning.SelectAll(visibleSoundIds);
+        pruning.Retain([bravo, charlie]);
+        AssertEqual(
+            2,
+            pruning.Count,
+            "the selection drops sounds that left the library");
+        pruning.Deactivate();
+        AssertTrue(
+            !pruning.IsActive && pruning.Count == 0,
+            "leaving organization mode clears the selection");
+
+        Console.WriteLine(
+            "PASS category moves, bulk moves, undo, import destinations, "
+            + "selection rules, counts, and category management");
+    }
+
+    /// <summary>
+    /// A one-second silent WAV with a seeded marker sample so every fixture
+    /// hashes differently and duplicate detection stays meaningful.
+    /// </summary>
+    private static void WriteDistinctTestWave(string path, int seed)
+    {
+        const int sampleRate = 8000;
+        const short channels = 1;
+        const short bitsPerSample = 16;
+        const int sampleCount = sampleRate;
+        const int dataLength =
+            sampleCount * channels * bitsPerSample / 8;
+
+        using var stream = File.Create(path);
+        using var writer = new BinaryWriter(stream);
+        writer.Write("RIFF"u8.ToArray());
+        writer.Write(36 + dataLength);
+        writer.Write("WAVE"u8.ToArray());
+        writer.Write("fmt "u8.ToArray());
+        writer.Write(16);
+        writer.Write((short)1);
+        writer.Write(channels);
+        writer.Write(sampleRate);
+        writer.Write(sampleRate * channels * bitsPerSample / 8);
+        writer.Write((short)(channels * bitsPerSample / 8));
+        writer.Write(bitsPerSample);
+        writer.Write("data"u8.ToArray());
+        writer.Write(dataLength);
+        for (var index = 0; index < sampleCount; index++)
+        {
+            writer.Write(index == 0 ? (short)seed : (short)0);
+        }
     }
 
     private static async Task RunAudioCompatibilityTestsAsync(string root)

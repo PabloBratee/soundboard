@@ -1,4 +1,4 @@
-SOUNDBOARD 1.1.0 FOR WINDOWS X64
+SOUNDBOARD 1.2.0 FOR WINDOWS X64
 ================================
 
 Soundboard is a local Windows soundboard with virtual microphone mixing.
@@ -18,7 +18,7 @@ INSTALLATION
 ------------
 
 Installer:
-Run Soundboard-Setup-v1.1.0-win-x64.exe. The per-user installer's Select
+Run Soundboard-Setup-v1.2.0-win-x64.exe. The per-user installer's Select
 Destination Location page displays this recommended default:
 
 %LOCALAPPDATA%\Programs\Soundboard
@@ -46,6 +46,15 @@ endpoint changes. In Discord or a game, select CABLE Output once as the input.
 The sound library starts empty. Soundboard includes no audio content and does
 not seed, download, or suggest sounds; use Import Sounds to add audio files you
 are authorized to use.
+
+ORGANIZING SOUNDS
+-----------------
+
+Drag a tile onto a category in the left sidebar to file it there, or use the
+Move to action in a tile's right-click menu. Organize mode selects several
+sounds at once so they can be moved or favorited together. Audio files can
+also be dragged from File Explorer onto the grid or onto a category. A move
+is saved immediately and can be undone from the notification that appears.
 
 DISCORD ROUTING
 ---------------
@@ -98,7 +107,7 @@ Soundboard.exe and the installer are currently unsigned. Windows SmartScreen
 or an Unknown Publisher warning may appear. Future public distribution should
 use a trusted Authenticode certificate with timestamping.
 
-Soundboard 1.1.0 does not include automatic updates or background update
+Soundboard 1.2.0 does not include automatic updates or background update
 checks.
 
 PROJECT LICENSE

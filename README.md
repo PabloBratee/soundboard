@@ -17,6 +17,15 @@ uses no telemetry or cloud storage, and does not access the network.
 - Persistent local sound library
 - Empty library on first launch, ready for user-controlled audio imports
 - Categories, Favorites, search, and persistent manual ordering
+- Drag a tile onto a sidebar category to file it, with an Undo notification
+- Organize mode for selecting several sounds and moving or favoriting them
+  together in one operation
+- Quick "Move to" category action on every tile
+- Imports go straight into the selected category, or into a destination you
+  pick as part of the import
+- Audio files can be dragged from File Explorer onto the grid or onto a
+  category
+- Inline category creation, renaming, and deletion in the sidebar
 - Tile accents and other tile personalization
 - Windows global hotkeys using registered key combinations
 - One-shot playback with concurrent sounds; re-triggering the same sound
@@ -57,14 +66,14 @@ Releases page](https://github.com/PabloBratee/soundboard/releases).
 
 ### Installer
 
-Run `Soundboard-Setup-v1.1.0-win-x64.exe`. The installer is per-user and shows
+Run `Soundboard-Setup-v1.2.0-win-x64.exe`. The installer is per-user and shows
 a destination page, so the installation folder can be changed. Its normal
 default under the current user's local application-data folder does not require
 administrator rights.
 
 ### Portable ZIP
 
-Extract `Soundboard-v1.1.0-win-x64-portable.zip` to a writable folder and run
+Extract `Soundboard-v1.2.0-win-x64-portable.zip` to a writable folder and run
 `Soundboard\Soundboard.exe`. Portable mode removes the installer requirement;
 user data still stays under `%LOCALAPPDATA%\Soundboard`.
 
@@ -160,8 +169,8 @@ as a normal executable.
 Inno Setup 7 is required to build the installer. From a clean checkout:
 
 ```powershell
-.\build\package.ps1 -Version 1.1.0
-.\build\verify-package.ps1 -Version 1.1.0
+.\build\package.ps1 -Version 1.2.0
+.\build\verify-package.ps1 -Version 1.2.0
 ```
 
 The packaging script restores, builds, format-checks, runs tests and the custom

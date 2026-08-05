@@ -23,6 +23,34 @@ public sealed record CategoryDeleteResult(
     IReadOnlyList<SoundCategory> Categories,
     int UncategorizedSoundCount);
 
+/// <summary>
+/// One sound's category membership at a single point in time.
+/// </summary>
+public sealed record SoundCategoryAssignment(
+    Guid SoundId,
+    Guid? CategoryId);
+
+/// <summary>
+/// Everything needed to put a completed category move back exactly the way
+/// it was: the previous category of each moved sound plus the complete
+/// library order that existed before the move.
+/// </summary>
+public sealed record SoundCategoryMoveUndo(
+    IReadOnlyList<SoundCategoryAssignment> Assignments,
+    IReadOnlyList<Guid> PreviousOrder)
+{
+    public bool CanUndo => Assignments.Count > 0;
+}
+
+public sealed record SoundCategoryMoveResult(
+    IReadOnlyList<SoundLibraryEntry> Sounds,
+    IReadOnlyList<Guid> MovedSoundIds,
+    Guid? CategoryId,
+    SoundCategoryMoveUndo Undo)
+{
+    public int MovedCount => MovedSoundIds.Count;
+}
+
 public sealed record SoundImportResult(
     IReadOnlyList<SoundLibraryEntry> Imported,
     IReadOnlyList<DuplicateSoundImport> Duplicates,

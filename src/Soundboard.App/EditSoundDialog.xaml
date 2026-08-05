@@ -3,13 +3,14 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Edit sound"
         Icon="Assets/Soundboard.ico"
-        Width="540"
-        Height="720"
+        Width="520"
+        SizeToContent="Height"
         MinWidth="460"
         Background="{StaticResource AppBackgroundBrush}"
         FontFamily="{StaticResource UiFontFamily}"
         FontSize="{StaticResource FontSizeBody}"
         Foreground="{StaticResource TextPrimaryBrush}"
+        PreviewKeyDown="EditSoundDialog_PreviewKeyDown"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         TextOptions.TextFormattingMode="Ideal"
@@ -18,45 +19,56 @@
     <Window.Resources>
         <Style x:Key="FieldLabelStyle"
                TargetType="TextBlock"
-               BasedOn="{StaticResource SubtitleTextStyle}">
-            <Setter Property="Margin" Value="0,0,0,6" />
+               BasedOn="{StaticResource CaptionTextStyle}">
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}" />
         </Style>
         <!-- See SettingsWindow: DisplayMemberPath does not reach the collapsed ComboBox. -->
         <DataTemplate x:Key="CategoryChoiceTemplate">
             <TextBlock Text="{Binding DisplayName}"
                        TextTrimming="CharacterEllipsis" />
         </DataTemplate>
+        <Style x:Key="FileFactLabelStyle"
+               TargetType="TextBlock"
+               BasedOn="{StaticResource MutedTextStyle}">
+            <Setter Property="Margin" Value="0,0,0,2" />
+        </Style>
     </Window.Resources>
 
-    <Grid Margin="22,20">
+    <Grid Margin="20,18">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <TextBlock Style="{StaticResource TitleTextStyle}"
-                   Text="Edit sound" />
+        <StackPanel>
+            <TextBlock Style="{StaticResource TitleTextStyle}"
+                       Text="Edit sound" />
+            <TextBlock Margin="0,3,0,0"
+                       Style="{StaticResource MutedTextStyle}"
+                       Text="Category, favorites, and ordering can also be changed straight from the library." />
+        </StackPanel>
 
-        <!-- Basic information -->
+        <!-- Identity -->
         <Border Grid.Row="1"
-                Margin="0,16,0,0"
+                Margin="0,14,0,0"
+                Padding="14"
                 Style="{StaticResource SurfacePanelStyle}">
             <StackPanel>
-                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
-                           Text="BASIC INFORMATION" />
                 <TextBlock Style="{StaticResource FieldLabelStyle}"
                            Text="Display name" />
                 <TextBox x:Name="NameTextBox"
                          MaxLength="120"
+                         TextChanged="EditField_Changed"
                          AutomationProperties.Name="Sound display name" />
 
-                <Grid Margin="0,14,0,0">
+                <Grid Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="14" />
+                        <ColumnDefinition Width="12" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <StackPanel>
@@ -64,129 +76,135 @@
                                    Text="Category" />
                         <ComboBox x:Name="CategoryComboBox"
                                   ItemTemplate="{StaticResource CategoryChoiceTemplate}"
+                                  MaxDropDownHeight="220"
+                                  SelectionChanged="EditField_Changed"
                                   AutomationProperties.Name="Sound category" />
                     </StackPanel>
                     <StackPanel Grid.Column="2">
                         <TextBlock Style="{StaticResource FieldLabelStyle}"
                                    Text="Tile accent" />
                         <ComboBox x:Name="TileAccentComboBox"
+                                  MaxDropDownHeight="220"
+                                  SelectionChanged="EditField_Changed"
                                   AutomationProperties.Name="Tile accent preset" />
                     </StackPanel>
                 </Grid>
 
                 <CheckBox x:Name="FavoriteCheckBox"
-                          Margin="0,16,0,0"
-                          Content="Favorite"
+                          Margin="0,14,0,0"
+                          Checked="EditField_Changed"
+                          Unchecked="EditField_Changed"
+                          Content="Show in Favorites"
                           AutomationProperties.Name="Favorite sound" />
-
-                <Grid Margin="0,16,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="56" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Style="{StaticResource FieldLabelStyle}"
-                                   Text="Sound volume" />
-                        <Slider x:Name="VolumeSlider"
-                                Minimum="0"
-                                Maximum="100"
-                                TickFrequency="1"
-                                IsSnapToTickEnabled="True"
-                                ValueChanged="VolumeSlider_ValueChanged"
-                                AutomationProperties.Name="Per-sound volume percentage" />
-                    </StackPanel>
-                    <TextBlock x:Name="VolumeTextBlock"
-                               Grid.Column="1"
-                               Margin="10,22,0,0"
-                               VerticalAlignment="Center"
-                               TextAlignment="Right"
-                               Text="100%" />
-                </Grid>
             </StackPanel>
         </Border>
 
-        <!-- File information -->
+        <!-- Playback -->
         <Border Grid.Row="2"
-                Margin="0,14,0,0"
+                Margin="0,10,0,0"
+                Padding="14"
                 Style="{StaticResource SurfacePanelStyle}">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="130" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-
-                <TextBlock Grid.ColumnSpan="2"
-                           Style="{StaticResource SectionHeadingTextStyle}"
-                           Text="FILE INFORMATION" />
-
-                <TextBlock Grid.Row="1"
-                           Style="{StaticResource SecondaryTextStyle}"
-                           Text="Original filename" />
-                <TextBlock x:Name="OriginalFileNameTextBlock"
-                           Grid.Row="1"
+                <StackPanel>
+                    <TextBlock Style="{StaticResource FieldLabelStyle}"
+                               Text="Sound volume" />
+                    <Slider x:Name="VolumeSlider"
+                            Minimum="0"
+                            Maximum="100"
+                            TickFrequency="1"
+                            IsSnapToTickEnabled="True"
+                            ValueChanged="VolumeSlider_ValueChanged"
+                            AutomationProperties.Name="Per-sound volume percentage" />
+                </StackPanel>
+                <TextBlock x:Name="VolumeTextBlock"
                            Grid.Column="1"
-                           TextWrapping="Wrap" />
-
-                <TextBlock Grid.Row="2"
-                           Margin="0,8,0,0"
-                           Style="{StaticResource SecondaryTextStyle}"
-                           Text="Duration" />
-                <TextBlock x:Name="DurationTextBlock"
-                           Grid.Row="2"
-                           Grid.Column="1"
-                           Margin="0,8,0,0" />
-
-                <TextBlock Grid.Row="3"
-                           Margin="0,8,0,0"
-                           Style="{StaticResource SecondaryTextStyle}"
-                           Text="Format" />
-                <TextBlock x:Name="FormatTextBlock"
-                           Grid.Row="3"
-                           Grid.Column="1"
-                           Margin="0,8,0,0" />
-
-                <TextBlock Grid.Row="4"
-                           Margin="0,8,0,0"
-                           Style="{StaticResource SecondaryTextStyle}"
-                           Text="Assigned hotkey" />
-                <Border Grid.Row="4"
-                        Grid.Column="1"
-                        Margin="0,8,0,0"
-                        HorizontalAlignment="Left"
-                        Style="{StaticResource KeyCapChipStyle}">
-                    <TextBlock x:Name="HotkeyTextBlock"
-                               Style="{StaticResource KeyCapTextStyle}" />
-                </Border>
+                           Width="46"
+                           Margin="12,16,0,0"
+                           VerticalAlignment="Center"
+                           TextAlignment="Right"
+                           Text="100%" />
             </Grid>
         </Border>
 
-        <TextBlock Grid.Row="3"
-                   Margin="0,14,0,0"
-                   VerticalAlignment="Top"
-                   Style="{StaticResource MutedTextStyle}"
-                   Text="Hotkeys are managed from the tile action menu. Saving metadata does not rename the managed audio file or interrupt playback." />
+        <!-- File information -->
+        <Border Grid.Row="3"
+                Margin="0,10,0,0"
+                Padding="14"
+                Style="{StaticResource SurfacePanelStyle}">
+            <StackPanel>
+                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                           Margin="0,0,0,6"
+                           Text="FILE" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource FileFactLabelStyle}"
+                                   Text="Original filename" />
+                        <TextBlock x:Name="OriginalFileNameTextBlock"
+                                   Margin="0,0,12,0"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,18,0">
+                        <TextBlock Style="{StaticResource FileFactLabelStyle}"
+                                   Text="Duration" />
+                        <TextBlock x:Name="DurationTextBlock" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Style="{StaticResource FileFactLabelStyle}"
+                                   Text="Format" />
+                        <TextBlock x:Name="FormatTextBlock" />
+                    </StackPanel>
+                </Grid>
+                <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                    <TextBlock Margin="0,0,8,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource FileFactLabelStyle}"
+                               Text="Assigned hotkey" />
+                    <Border HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource KeyCapChipStyle}">
+                        <TextBlock x:Name="HotkeyTextBlock"
+                                   Style="{StaticResource KeyCapTextStyle}" />
+                    </Border>
+                    <TextBlock Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="Change it from the tile menu" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
 
+        <!--
+            Affirmative button first, matching the Windows desktop dialog
+            convention, with Cancel to its right.
+        -->
         <StackPanel Grid.Row="4"
                     Margin="0,16,0,0"
                     HorizontalAlignment="Right"
                     Orientation="Horizontal">
-            <Button MinWidth="92"
-                    Content="Cancel"
-                    IsCancel="True"
-                    Click="CancelButton_Click" />
-            <Button Margin="10,0,0,0"
+            <Button x:Name="SaveButton"
                     MinWidth="92"
                     Content="Save"
                     IsDefault="True"
+                    IsEnabled="False"
                     Click="SaveButton_Click"
-                    Style="{StaticResource PrimaryButtonStyle}" />
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    ToolTip="Save the changed properties"
+                    AutomationProperties.Name="Save sound properties" />
+            <Button Margin="10,0,0,0"
+                    MinWidth="92"
+                    Content="Cancel"
+                    Click="CancelButton_Click"
+                    AutomationProperties.Name="Cancel without saving" />
         </StackPanel>
     </Grid>
 </Window>

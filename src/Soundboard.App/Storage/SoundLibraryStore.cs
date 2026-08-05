@@ -266,6 +266,254 @@ public sealed class SoundLibraryStore : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Single entry point for every category assignment in the application:
+    /// the quick tile menu, a drag onto a sidebar category, and a bulk move
+    /// from the selection command bar all funnel through here so one code
+    /// path owns validation, ordering, and persistence.
+    /// </summary>
+    /// <remarks>
+    /// Every requested sound is validated before anything is written, so a
+    /// multi-sound move either lands completely or leaves the library
+    /// untouched. Moved sounds keep their relative order and are placed
+    /// directly after the last sound already in the destination, which makes
+    /// the resulting order deterministic and independent of selection order.
+    /// </remarks>
+    public async Task<SoundCategoryMoveResult> MoveToCategoryAsync(
+        IReadOnlyList<Guid> soundIds,
+        Guid? categoryId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(soundIds);
+
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            EnsureLoaded();
+            ValidateCategoryExists(categoryId);
+
+            var requested = soundIds.Distinct().ToArray();
+            if (requested.Length == 0)
+            {
+                throw new ArgumentException(
+                    "Select at least one sound to move.",
+                    nameof(soundIds));
+            }
+
+            var ordered = entries.OrderBy(sound => sound.SortOrder).ToList();
+            var byId = ordered.ToDictionary(sound => sound.Id);
+            foreach (var soundId in requested)
+            {
+                if (!byId.ContainsKey(soundId))
+                {
+                    throw new KeyNotFoundException(
+                        "One of the selected sounds no longer exists in the "
+                        + "library. Nothing was moved.");
+                }
+            }
+
+            var previousOrder = ordered
+                .Select(sound => sound.Id)
+                .ToArray();
+            var movingIds = requested
+                .Where(soundId => byId[soundId].CategoryId != categoryId)
+                .ToHashSet();
+            if (movingIds.Count == 0)
+            {
+                return new SoundCategoryMoveResult(
+                    entries.ToArray(),
+                    [],
+                    categoryId,
+                    new SoundCategoryMoveUndo([], previousOrder));
+            }
+
+            var undo = new SoundCategoryMoveUndo(
+                movingIds
+                    .Select(
+                        soundId => new SoundCategoryAssignment(
+                            soundId,
+                            byId[soundId].CategoryId))
+                    .ToArray(),
+                previousOrder);
+
+            var moving = ordered
+                .Where(sound => movingIds.Contains(sound.Id))
+                .Select(sound => sound with { CategoryId = categoryId })
+                .ToList();
+            var updatedEntries = ordered
+                .Where(sound => !movingIds.Contains(sound.Id))
+                .ToList();
+            var lastDestinationIndex = updatedEntries.FindLastIndex(
+                sound => sound.CategoryId == categoryId);
+            updatedEntries.InsertRange(
+                lastDestinationIndex < 0
+                    ? updatedEntries.Count
+                    : lastDestinationIndex + 1,
+                moving);
+            for (var index = 0; index < updatedEntries.Count; index++)
+            {
+                updatedEntries[index] = updatedEntries[index] with
+                {
+                    SortOrder = index
+                };
+            }
+
+            await SaveDocumentCoreAsync(
+                updatedEntries,
+                categories,
+                cancellationToken);
+            entries.Clear();
+            entries.AddRange(updatedEntries);
+            return new SoundCategoryMoveResult(
+                entries.ToArray(),
+                moving.Select(sound => sound.Id).ToArray(),
+                categoryId,
+                undo);
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Reverses a completed <see cref="MoveToCategoryAsync"/> in one write.
+    /// </summary>
+    /// <remarks>
+    /// The library can have changed since the move, so this is tolerant by
+    /// design: sounds that were removed meanwhile are skipped, sounds that
+    /// appeared meanwhile keep their current position at the end, and a
+    /// previous category that has since been deleted resolves to
+    /// Uncategorized instead of failing the whole undo.
+    /// </remarks>
+    public async Task<IReadOnlyList<SoundLibraryEntry>>
+        RestoreCategoryAssignmentsAsync(
+            SoundCategoryMoveUndo undo,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(undo);
+
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            EnsureLoaded();
+
+            var restored = entries.ToDictionary(sound => sound.Id);
+            foreach (var assignment in undo.Assignments)
+            {
+                if (!restored.TryGetValue(assignment.SoundId, out var sound))
+                {
+                    continue;
+                }
+
+                var previousCategoryId =
+                    assignment.CategoryId is { } id
+                    && categories.Any(category => category.Id == id)
+                        ? assignment.CategoryId
+                        : null;
+                restored[assignment.SoundId] = sound with
+                {
+                    CategoryId = previousCategoryId
+                };
+            }
+
+            var updatedEntries = new List<SoundLibraryEntry>();
+            var placed = new HashSet<Guid>();
+            foreach (var soundId in undo.PreviousOrder)
+            {
+                if (restored.TryGetValue(soundId, out var sound)
+                    && placed.Add(soundId))
+                {
+                    updatedEntries.Add(sound);
+                }
+            }
+
+            foreach (var sound in entries.OrderBy(item => item.SortOrder))
+            {
+                if (placed.Add(sound.Id))
+                {
+                    updatedEntries.Add(restored[sound.Id]);
+                }
+            }
+
+            for (var index = 0; index < updatedEntries.Count; index++)
+            {
+                updatedEntries[index] = updatedEntries[index] with
+                {
+                    SortOrder = index
+                };
+            }
+
+            await SaveDocumentCoreAsync(
+                updatedEntries,
+                categories,
+                cancellationToken);
+            entries.Clear();
+            entries.AddRange(updatedEntries);
+            return entries.ToArray();
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Sets the favorite flag on one or many sounds in a single write.
+    /// </summary>
+    public async Task<IReadOnlyList<SoundLibraryEntry>> SetFavoriteAsync(
+        IReadOnlyList<Guid> soundIds,
+        bool isFavorite,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(soundIds);
+
+        await operationGate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            EnsureLoaded();
+
+            var requested = soundIds.Distinct().ToHashSet();
+            if (requested.Count == 0)
+            {
+                throw new ArgumentException(
+                    "Select at least one sound.",
+                    nameof(soundIds));
+            }
+
+            foreach (var soundId in requested)
+            {
+                if (entries.All(sound => sound.Id != soundId))
+                {
+                    throw new KeyNotFoundException(
+                        "One of the selected sounds no longer exists in the "
+                        + "library. Nothing was changed.");
+                }
+            }
+
+            var updatedEntries = entries
+                .Select(
+                    sound => requested.Contains(sound.Id)
+                        ? sound with { IsFavorite = isFavorite }
+                        : sound)
+                .ToList();
+            await SaveDocumentCoreAsync(
+                updatedEntries,
+                categories,
+                cancellationToken);
+            entries.Clear();
+            entries.AddRange(updatedEntries);
+            return entries.ToArray();
+        }
+        finally
+        {
+            operationGate.Release();
+        }
+    }
+
     public async Task<SoundLibraryEntry> RenameAsync(
         Guid soundId,
         string displayName,

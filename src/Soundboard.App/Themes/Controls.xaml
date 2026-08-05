@@ -14,6 +14,18 @@
 
     <system:Double x:Key="ControlCornerRadiusValue">6</system:Double>
     <CornerRadius x:Key="ControlCornerRadius">6</CornerRadius>
+
+    <!--
+        Shared elevation for anything that floats above the page. Without it,
+        a dropdown or menu blends into the control it covers, which reads as
+        a collision rather than a layer.
+    -->
+    <DropShadowEffect x:Key="FlyoutShadowEffect"
+                      BlurRadius="14"
+                      Direction="270"
+                      Opacity="0.5"
+                      ShadowDepth="3"
+                      Color="#FF05070B" />
     <CornerRadius x:Key="SurfaceCornerRadius">10</CornerRadius>
     <CornerRadius x:Key="PillCornerRadius">999</CornerRadius>
 
@@ -568,13 +580,14 @@
                                IsOpen="{TemplateBinding IsDropDownOpen}"
                                Placement="Bottom"
                                PopupAnimation="Fade">
-                            <Border Margin="0,4,0,0"
+                            <Border Margin="0,4,6,6"
                                     MinWidth="{TemplateBinding ActualWidth}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}"
                                     Background="{StaticResource SurfaceRaisedBackgroundBrush}"
                                     BorderBrush="{StaticResource BorderStrongBrush}"
                                     BorderThickness="1"
                                     CornerRadius="{StaticResource ControlCornerRadius}"
+                                    Effect="{StaticResource FlyoutShadowEffect}"
                                     SnapsToDevicePixels="True">
                                 <ScrollViewer Margin="0,3"
                                               SnapsToDevicePixels="True">
@@ -831,6 +844,8 @@
     </Style>
 
     <Style TargetType="ContextMenu">
+        <!-- Lets the popup be transparent so the flyout shadow can render. -->
+        <Setter Property="HasDropShadow" Value="True" />
         <Setter Property="Background" Value="{StaticResource SurfaceRaisedBackgroundBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="1" />
@@ -838,10 +853,12 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
-                    <Border Background="{TemplateBinding Background}"
+                    <Border Margin="0,0,6,6"
+                            Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             CornerRadius="{StaticResource ControlCornerRadius}"
+                            Effect="{StaticResource FlyoutShadowEffect}"
                             SnapsToDevicePixels="True">
                         <ItemsPresenter Margin="{TemplateBinding Padding}"
                                         KeyboardNavigation.DirectionalNavigation="Cycle" />
@@ -869,6 +886,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <ContentPresenter x:Name="Icon"
                                               Margin="10,0,0,0"
@@ -879,9 +897,50 @@
                                               VerticalAlignment="Center"
                                               ContentSource="Header"
                                               RecognizesAccessKey="True" />
+                            <TextBlock x:Name="SubmenuChevron"
+                                       Grid.Column="2"
+                                       Margin="0,0,10,0"
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource IconFontFamily}"
+                                       FontSize="10"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       Text="&#xE76C;"
+                                       Visibility="Collapsed" />
+                            <!--
+                                Submenu surface. The default MenuItem template
+                                supplies this; a custom template has to bring
+                                its own or nested menus never appear.
+                            -->
+                            <Popup x:Name="PART_Popup"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   HorizontalOffset="-4"
+                                   IsOpen="{TemplateBinding IsSubmenuOpen}"
+                                   Placement="Right"
+                                   PopupAnimation="Fade"
+                                   VerticalOffset="-6">
+                                <Border Margin="0,0,6,6"
+                                        Background="{StaticResource SurfaceRaisedBackgroundBrush}"
+                                        BorderBrush="{StaticResource BorderStrongBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="{StaticResource ControlCornerRadius}"
+                                        Effect="{StaticResource FlyoutShadowEffect}"
+                                        SnapsToDevicePixels="True">
+                                    <ScrollViewer MaxHeight="420"
+                                                  Margin="0,4"
+                                                  SnapsToDevicePixels="True">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="HasItems" Value="True">
+                            <Setter TargetName="SubmenuChevron"
+                                    Property="Visibility"
+                                    Value="Visible" />
+                        </Trigger>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Root"
                                     Property="Background"
