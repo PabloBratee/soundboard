@@ -1,17 +1,17 @@
 #ifndef AppVersion
-  #define AppVersion "1.2.1"
+  #define AppVersion "1.2.2"
 #endif
 #ifndef NumericVersion
-  #define NumericVersion "1.2.1.0"
+  #define NumericVersion "1.2.2.0"
 #endif
 #ifndef DistributionDir
-  #define DistributionDir "..\artifacts\staging\Soundboard-v1.2.1-win-x64\Soundboard"
+  #define DistributionDir "..\artifacts\staging\Soundboard-v1.2.2-win-x64\Soundboard"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\artifacts\release"
 #endif
 #ifndef OutputBaseFilename
-  #define OutputBaseFilename "Soundboard-Setup-v1.2.1-win-x64"
+  #define OutputBaseFilename "Soundboard-Setup-v1.2.2-win-x64"
 #endif
 
 #define ProductName "Soundboard"

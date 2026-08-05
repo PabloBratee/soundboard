@@ -66,14 +66,14 @@ Releases page](https://github.com/PabloBratee/soundboard/releases).
 
 ### Installer
 
-Run `Soundboard-Setup-v1.2.1-win-x64.exe`. The installer is per-user and shows
+Run `Soundboard-Setup-v1.2.2-win-x64.exe`. The installer is per-user and shows
 a destination page, so the installation folder can be changed. Its normal
 default under the current user's local application-data folder does not require
 administrator rights.
 
 ### Portable ZIP
 
-Extract `Soundboard-v1.2.1-win-x64-portable.zip` to a writable folder and run
+Extract `Soundboard-v1.2.2-win-x64-portable.zip` to a writable folder and run
 `Soundboard\Soundboard.exe`. Portable mode removes the installer requirement;
 user data still stays under `%LOCALAPPDATA%\Soundboard`.
 
@@ -170,8 +170,8 @@ as a normal executable.
 Inno Setup 7 is required to build the installer. From a clean checkout:
 
 ```powershell
-.\build\package.ps1 -Version 1.2.1
-.\build\verify-package.ps1 -Version 1.2.1
+.\build\package.ps1 -Version 1.2.2
+.\build\verify-package.ps1 -Version 1.2.2
 ```
 
 The packaging script restores, builds, format-checks, runs tests and the custom

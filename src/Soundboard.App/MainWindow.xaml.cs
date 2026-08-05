@@ -24,6 +24,9 @@ public partial class MainWindow : Window
     private static readonly TimeSpan SettingsSaveDelay =
         TimeSpan.FromMilliseconds(650);
 
+    private static readonly TimeSpan DeviceChangeSettleDelay =
+        TimeSpan.FromMilliseconds(750);
+
     private readonly AudioDeviceService audioDeviceService = new();
     private readonly AudioMixEngine audioEngine = new();
     private readonly AudioServiceLifecycle audioServiceLifecycle;
@@ -87,6 +90,7 @@ public partial class MainWindow : Window
     private long formatRequestNumber;
     private long soundTriggerRequestGeneration;
     private long audioServiceRequestGeneration;
+    private long currentAudioEngineSessionId;
     private EmptyStateAction emptyStateAction = EmptyStateAction.Import;
     private CategoryEditorMode categoryEditorMode = CategoryEditorMode.Hidden;
     private Guid? categoryEditorCategoryId;
@@ -555,8 +559,14 @@ public partial class MainWindow : Window
     private async Task RefreshDevicesAsync(
         string? preferredCaptureId = null,
         string? preferredRenderId = null,
-        string? preferredMonitorId = null)
+        string? preferredMonitorId = null,
+        AudioDeviceSnapshot? knownSnapshot = null,
+        bool preserveOperationalStatus = false)
     {
+        var previousStatus = StatusTextBlock.Text;
+        var previousError = ErrorTextBlock.Text;
+        var previousDiagnostic = lastDiagnosticMessage;
+        var refreshedWithoutWarnings = false;
         var selectedCaptureId = preferredCaptureId
             ?? (MicrophoneComboBox.SelectedItem as AudioEndpoint)?.DeviceId;
         var selectedRenderId = preferredRenderId
@@ -573,9 +583,10 @@ public partial class MainWindow : Window
 
         try
         {
-            var snapshot = await Task.Run(
-                audioDeviceService.GetActiveDevices);
+            var snapshot = knownSnapshot
+                ?? await Task.Run(audioDeviceService.GetActiveDevices);
             currentSnapshot = snapshot;
+            refreshedWithoutWarnings = snapshot.Warnings.Count == 0;
 
             var physicalCaptureEndpoints =
                 AudioEndpointSelectionPolicy.PhysicalMicrophones(
@@ -689,6 +700,13 @@ public partial class MainWindow : Window
         {
             isApplyingSettings = false;
             isRefreshing = false;
+            if (preserveOperationalStatus
+                && refreshedWithoutWarnings)
+            {
+                StatusTextBlock.Text = previousStatus;
+                ErrorTextBlock.Text = previousError;
+                lastDiagnosticMessage = previousDiagnostic;
+            }
             UpdateControlAvailability();
             RefreshDiagnosticStatus();
         }
@@ -844,7 +862,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RestartAudioServiceAsync(string reason)
+    private async Task RestartAudioServiceAsync(
+        string reason,
+        AudioDeviceSnapshot? knownSnapshot = null,
+        bool keepHealthyRoute = false,
+        CancellationToken cancellationToken = default)
     {
         var requestGeneration = Interlocked.Increment(
             ref audioServiceRequestGeneration);
@@ -853,7 +875,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        await audioServiceGate.WaitAsync();
+        await audioServiceGate.WaitAsync(cancellationToken);
         try
         {
             if (isClosing
@@ -863,12 +885,29 @@ public partial class MainWindow : Window
                 return;
             }
 
+            if (keepHealthyRoute
+                && knownSnapshot is not null
+                && IsCurrentAudioRouteHealthy(knownSnapshot))
+            {
+                // Endpoint notifications can describe unrelated or transient
+                // changes. Refresh the selectors without interrupting a route
+                // whose selected endpoints and streams are still healthy.
+                await RefreshDevicesAsync(
+                    appSettings.MicrophoneEndpointId,
+                    appSettings.VirtualOutputEndpointId,
+                    appSettings.MonitorOutputEndpointId,
+                    knownSnapshot,
+                    preserveOperationalStatus: true);
+                return;
+            }
+
             await audioServiceLifecycle.StopAsync();
 
             await RefreshDevicesAsync(
                 appSettings.MicrophoneEndpointId,
                 appSettings.VirtualOutputEndpointId,
-                appSettings.MonitorOutputEndpointId);
+                appSettings.MonitorOutputEndpointId,
+                knownSnapshot);
             if (isClosing
                 || requestGeneration
                     != Interlocked.Read(ref audioServiceRequestGeneration))
@@ -888,8 +927,12 @@ public partial class MainWindow : Window
         object? sender,
         AudioDeviceChangedEventArgs eventArgs)
     {
-        if (isClosing)
+        if (isClosing
+            || eventArgs.Kind == AudioDeviceChangeKind.PropertyChanged)
         {
+            // Core Audio property notifications include harmless endpoint
+            // metadata churn. WASAPI stop callbacks remain authoritative for
+            // a real capture or render stream failure.
             return;
         }
 
@@ -923,14 +966,88 @@ public partial class MainWindow : Window
     {
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            await Task.Delay(DeviceChangeSettleDelay, cancellationToken);
+            var snapshot = await Task.Run(
+                audioDeviceService.GetActiveDevices,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             await RestartAudioServiceAsync(
-                $"Windows audio device {eventArgs.Kind.ToString().ToLowerInvariant()}");
+                $"Windows audio device {eventArgs.Kind.ToString().ToLowerInvariant()}",
+                snapshot,
+                keepHealthyRoute: true,
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
             // A newer endpoint event superseded this reconciliation.
         }
+        catch (Exception exception)
+        {
+            if (!isClosing)
+            {
+                ShowUiError(
+                    "Windows audio devices could not be reconciled: "
+                    + exception.Message);
+            }
+        }
+    }
+
+    private bool IsCurrentAudioRouteHealthy(AudioDeviceSnapshot snapshot)
+    {
+        var diagnostics = audioEngine.Diagnostics;
+        if (audioEngine.State != AudioEngineState.Running
+            || diagnostics is null)
+        {
+            return false;
+        }
+
+        var physicalMicrophones =
+            AudioEndpointSelectionPolicy.PhysicalMicrophones(
+                snapshot.CaptureEndpoints);
+        var microphone = AudioEndpointSelectionPolicy.SelectMicrophone(
+            physicalMicrophones,
+            appSettings.UseDefaultMicrophone,
+            appSettings.MicrophoneEndpointId);
+        var virtualOutput = AudioEndpointSelectionPolicy.SelectVirtualOutput(
+            AudioEndpointSelectionPolicy.VirtualOutputs(
+                snapshot.RenderEndpoints),
+            appSettings.VirtualOutputEndpointId);
+        var physicalRenderEndpoints = snapshot.RenderEndpoints
+            .Where(endpoint => !endpoint.IsLikelyVbCable)
+            .ToArray();
+        var savedMonitor = FindById(
+            snapshot.RenderEndpoints,
+            appSettings.MonitorOutputEndpointId);
+        var monitor =
+            (savedMonitor is { IsLikelyVbCable: false }
+                ? FindById(physicalRenderEndpoints, savedMonitor.DeviceId)
+                : null)
+            ?? physicalRenderEndpoints.FirstOrDefault(
+                endpoint => endpoint.IsDefault)
+            ?? physicalRenderEndpoints.FirstOrDefault();
+        var relatedVirtualCaptureIsActive = snapshot.CaptureEndpoints.Any(
+            endpoint => string.Equals(
+                endpoint.DeviceId,
+                diagnostics.RelatedVbCableCaptureEndpointId,
+                StringComparison.Ordinal));
+
+        return microphone is not null
+            && virtualOutput is not null
+            && relatedVirtualCaptureIsActive
+            && string.Equals(
+                microphone.DeviceId,
+                diagnostics.MicrophoneEndpointId,
+                StringComparison.Ordinal)
+            && string.Equals(
+                virtualOutput.DeviceId,
+                diagnostics.RenderEndpointId,
+                StringComparison.Ordinal)
+            && diagnostics.MonitoringEnabled == appSettings.MonitoringEnabled
+            && (!appSettings.MonitoringEnabled
+                || string.Equals(
+                    monitor?.DeviceId,
+                    diagnostics.MonitorEndpointId,
+                    StringComparison.Ordinal));
     }
 
     private async void UseDefaultMicrophoneCheckBox_Changed(
@@ -3594,9 +3711,20 @@ public partial class MainWindow : Window
         object? sender,
         AudioEngineStateChangedEventArgs eventArgs)
     {
+        if (!ObserveCurrentAudioEngineSession(eventArgs.SessionId))
+        {
+            return;
+        }
+
         RunOnUiThread(
             () =>
             {
+                if (eventArgs.SessionId
+                    != Interlocked.Read(ref currentAudioEngineSessionId))
+                {
+                    return;
+                }
+
                 UpdateEnginePresentation();
                 UpdateControlAvailability();
                 RefreshDiagnosticStatus();
@@ -3672,9 +3800,20 @@ public partial class MainWindow : Window
         object? sender,
         AudioEngineErrorEventArgs eventArgs)
     {
+        if (!ObserveCurrentAudioEngineSession(eventArgs.SessionId))
+        {
+            return;
+        }
+
         RunOnUiThread(
             () =>
             {
+                if (eventArgs.SessionId
+                    != Interlocked.Read(ref currentAudioEngineSessionId))
+                {
+                    return;
+                }
+
                 lastDiagnosticMessage = eventArgs.Message;
                 ErrorTextBlock.Text = eventArgs.Message;
 
@@ -3687,6 +3826,28 @@ public partial class MainWindow : Window
                 UpdateMonitorStatusForSelection();
                 RefreshDiagnosticStatus();
             });
+    }
+
+    private bool ObserveCurrentAudioEngineSession(long sessionId)
+    {
+        while (true)
+        {
+            var currentSessionId = Interlocked.Read(
+                ref currentAudioEngineSessionId);
+            if (sessionId < currentSessionId)
+            {
+                return false;
+            }
+
+            if (sessionId == currentSessionId
+                || Interlocked.CompareExchange(
+                    ref currentAudioEngineSessionId,
+                    sessionId,
+                    currentSessionId) == currentSessionId)
+            {
+                return true;
+            }
+        }
     }
 
     private void AudioEngine_PeakLevelsChanged(

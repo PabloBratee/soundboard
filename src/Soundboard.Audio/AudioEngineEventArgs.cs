@@ -1,18 +1,24 @@
 namespace Soundboard.Audio;
 
 public sealed class AudioEngineStateChangedEventArgs(
-    AudioEngineState state) : EventArgs
+    AudioEngineState state,
+    long sessionId) : EventArgs
 {
     public AudioEngineState State { get; } = state;
+
+    public long SessionId { get; } = sessionId;
 }
 
 public sealed class AudioEngineErrorEventArgs(
     string message,
-    bool isRecoverable) : EventArgs
+    bool isRecoverable,
+    long sessionId) : EventArgs
 {
     public string Message { get; } = message;
 
     public bool IsRecoverable { get; } = isRecoverable;
+
+    public long SessionId { get; } = sessionId;
 }
 
 public sealed class AudioPeakLevelsEventArgs(

@@ -25,6 +25,7 @@ public sealed class AudioMixEngine : IDisposable
     private int stateValue = (int)AudioEngineState.Stopped;
     private int faultCleanupQueued;
     private int monitorFaultCleanupQueued;
+    private long audioSessionGeneration;
     private long soundSessionGeneration;
     private long microphoneBufferOverflowCount;
     private float microphonePeak;
@@ -150,6 +151,7 @@ public sealed class AudioMixEngine : IDisposable
                     $"The audio engine cannot start while it is {State}.");
             }
 
+            Interlocked.Increment(ref audioSessionGeneration);
             SetState(AudioEngineState.Starting);
             Interlocked.Exchange(ref microphoneBufferOverflowCount, 0);
             Interlocked.Exchange(ref faultCleanupQueued, 0);
@@ -853,6 +855,7 @@ public sealed class AudioMixEngine : IDisposable
         catch (Exception exception)
         {
             HandleRuntimeFault(
+                pipeline,
                 $"Microphone capture failed: {exception.Message}");
         }
         finally
@@ -882,7 +885,9 @@ public sealed class AudioMixEngine : IDisposable
 
             var details = eventArgs.Exception?.Message
                 ?? "the capture endpoint stopped unexpectedly";
-            HandleRuntimeFault($"Microphone capture stopped: {details}.");
+            HandleRuntimeFault(
+                pipeline,
+                $"Microphone capture stopped: {details}.");
         }
         finally
         {
@@ -911,7 +916,9 @@ public sealed class AudioMixEngine : IDisposable
 
             var details = eventArgs.Exception?.Message
                 ?? "the render endpoint stopped unexpectedly";
-            HandleRuntimeFault($"Audio output stopped: {details}.");
+            HandleRuntimeFault(
+                pipeline,
+                $"Audio output stopped: {details}.");
         }
         finally
         {
@@ -1422,8 +1429,15 @@ public sealed class AudioMixEngine : IDisposable
         diagnostics = resources.Diagnostics;
     }
 
-    private void HandleRuntimeFault(string message)
+    private void HandleRuntimeFault(
+        AudioPipelineResources sourcePipeline,
+        string message)
     {
+        if (!ReferenceEquals(Volatile.Read(ref resources), sourcePipeline))
+        {
+            return;
+        }
+
         var state = State;
 
         if (state is AudioEngineState.Stopping
@@ -1443,7 +1457,13 @@ public sealed class AudioMixEngine : IDisposable
                 {
                     lock (lifecycleLock)
                     {
-                        StopCore(leaveFaulted: true);
+                        // A reconnect may have installed a newer pipeline
+                        // before this queued cleanup gets the lifecycle lock.
+                        if (ReferenceEquals(resources, sourcePipeline)
+                            && State == AudioEngineState.Faulted)
+                        {
+                            StopCore(leaveFaulted: true);
+                        }
                     }
                 });
         }
@@ -1486,7 +1506,9 @@ public sealed class AudioMixEngine : IDisposable
         {
             StateChanged?.Invoke(
                 this,
-                new AudioEngineStateChangedEventArgs(state));
+                new AudioEngineStateChangedEventArgs(
+                    state,
+                    Interlocked.Read(ref audioSessionGeneration)));
         }
     }
 
@@ -1494,7 +1516,10 @@ public sealed class AudioMixEngine : IDisposable
     {
         ErrorOccurred?.Invoke(
             this,
-            new AudioEngineErrorEventArgs(message, isRecoverable));
+            new AudioEngineErrorEventArgs(
+                message,
+                isRecoverable,
+                Interlocked.Read(ref audioSessionGeneration)));
     }
 
     private void RaiseSoundPlaybackStateChanged(
