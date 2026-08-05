@@ -9,7 +9,8 @@ namespace Soundboard.App.Hotkeys;
 public enum HotkeyTargetKind
 {
     Sound,
-    StopSound
+    StopSound,
+    PauseResumePlayback
 }
 
 public readonly record struct HotkeyTarget(
@@ -30,6 +31,9 @@ public readonly record struct HotkeyTarget(
 
     public static HotkeyTarget StopSound { get; } =
         new(HotkeyTargetKind.StopSound, Guid.Empty);
+
+    public static HotkeyTarget PauseResumePlayback { get; } =
+        new(HotkeyTargetKind.PauseResumePlayback, Guid.Empty);
 }
 
 public enum HotkeyRegistrationState
@@ -612,9 +616,12 @@ public sealed partial class GlobalHotkeyService : IDisposable
 
     private static string DescribeTarget(HotkeyTarget target)
     {
-        return target.Kind == HotkeyTargetKind.StopSound
-            ? "Stop Sound"
-            : $"sound {target.SoundId}";
+        return target.Kind switch
+        {
+            HotkeyTargetKind.StopSound => "Stop Sound",
+            HotkeyTargetKind.PauseResumePlayback => "Pause/Resume playback",
+            _ => $"sound {target.SoundId}"
+        };
     }
 
     internal static uint GetNativeModifiers(HotkeyModifiers modifiers)

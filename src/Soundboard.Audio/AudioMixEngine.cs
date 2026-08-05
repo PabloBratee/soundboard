@@ -15,12 +15,22 @@ public sealed class AudioMixEngine : IDisposable
 
     private readonly object lifecycleLock = new();
     private readonly IAudioFileDecoderFactory decoderFactory;
+
+    /// <summary>
+    /// Shared with every pipeline generation so Voice Priority survives a
+    /// device reconnect without a settings round trip.
+    /// </summary>
+    private readonly VoicePriorityController voicePriority = new();
+
     private AudioPipelineResources? resources;
     private readonly Dictionary<Guid, SoundPlaybackSession> activeSounds = [];
     private Guid? mostRecentSoundId;
     private AudioMixEngineDiagnostics? diagnostics;
+    private VoicePrioritySettings voicePrioritySettings =
+        VoicePrioritySettings.Disabled;
     private float soundVolume = 1f;
     private float monitorVolume = 1f;
+    private bool playbackPaused;
     private bool disposed;
     private int stateValue = (int)AudioEngineState.Stopped;
     private int faultCleanupQueued;
@@ -78,6 +88,65 @@ public sealed class AudioMixEngine : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// True while decoded sound sessions are held at their exact sample
+    /// positions. Microphone passthrough is never paused.
+    /// </summary>
+    public bool IsPlaybackPaused
+    {
+        get
+        {
+            lock (lifecycleLock)
+            {
+                return playbackPaused;
+            }
+        }
+    }
+
+    public bool CanPausePlayback
+    {
+        get
+        {
+            lock (lifecycleLock)
+            {
+                return activeSounds.Count > 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Automatic microphone-triggered ducking of soundboard playback. The
+    /// microphone branch itself is never attenuated.
+    /// </summary>
+    public VoicePrioritySettings VoicePriority
+    {
+        get
+        {
+            lock (lifecycleLock)
+            {
+                return voicePrioritySettings;
+            }
+        }
+
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+
+            lock (lifecycleLock)
+            {
+                ThrowIfDisposed();
+                voicePrioritySettings = value;
+                voicePriority.Apply(value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True while speech is detected and sounds are currently lowered.
+    /// Read without locking so status polling never blocks audio work.
+    /// </summary>
+    public bool IsVoiceDuckingActive => voicePriority.IsDucking;
 
     public float SoundVolume
     {
@@ -156,6 +225,7 @@ public sealed class AudioMixEngine : IDisposable
             Interlocked.Exchange(ref microphoneBufferOverflowCount, 0);
             Interlocked.Exchange(ref faultCleanupQueued, 0);
             Interlocked.Exchange(ref monitorFaultCleanupQueued, 0);
+            voicePriority.Reset();
             ResetPeakLevels();
 
             AudioPipelineResources? newResources = null;
@@ -273,9 +343,12 @@ public sealed class AudioMixEngine : IDisposable
                     soundVolume,
                     monitorVolume);
 
+                // A sound triggered while playback is globally paused starts
+                // at its normal beginning position and waits there.
+                session.SetPaused(playbackPaused);
                 activeSounds.Add(soundId, session);
                 mostRecentSoundId = soundId;
-                resources.Mixer.AddMixerInput(session.VirtualBranch);
+                resources.SoundMixer.AddMixerInput(session.VirtualBranch);
 
                 if (resources.Monitor is not null)
                 {
@@ -320,7 +393,7 @@ public sealed class AudioMixEngine : IDisposable
                                 .MaxBy(item => item.SessionId)?.SoundId;
                     }
 
-                    resources.Mixer.RemoveMixerInput(
+                    resources.SoundMixer.RemoveMixerInput(
                         session.VirtualBranch);
                     var monitorBranch = session.DetachMonitorBranch();
                     if (monitorBranch is not null)
@@ -348,6 +421,31 @@ public sealed class AudioMixEngine : IDisposable
         {
             ThrowIfDisposed();
             StopAllSoundsCore(raiseEvents: true);
+        }
+    }
+
+    /// <summary>
+    /// Flips the single global paused state for decoded sound sessions and
+    /// returns the resulting state. Does nothing when nothing can be paused.
+    /// </summary>
+    public bool TogglePlaybackPause()
+    {
+        lock (lifecycleLock)
+        {
+            ThrowIfDisposed();
+            return SetPlaybackPausedCore(!playbackPaused);
+        }
+    }
+
+    /// <summary>
+    /// Applies the global paused state and returns the resulting state.
+    /// </summary>
+    public bool SetPlaybackPaused(bool paused)
+    {
+        lock (lifecycleLock)
+        {
+            ThrowIfDisposed();
+            return SetPlaybackPausedCore(paused);
         }
     }
 
@@ -468,16 +566,36 @@ public sealed class AudioMixEngine : IDisposable
                 out var microphoneResamplingActive,
                 out var microphoneChannelConversionActive);
 
-            var microphoneMeter = new MeteringSampleProvider(
+            // Voice detection sits on the physical microphone branch only,
+            // before it reaches the soundboard mix, so soundboard playback can
+            // never activate its own ducking.
+            var microphoneActivity = new MicrophoneActivityDetector(
                 microphoneSamples,
+                voicePriority);
+
+            var microphoneMeter = new MeteringSampleProvider(
+                microphoneActivity,
                 GetSamplesPerNotification(targetFormat));
+
+            var soundMixer = new MixingSampleProvider(targetFormat)
+            {
+                ReadFully = true
+            };
+            var soundDucking = new VoiceDuckingSampleProvider(
+                soundMixer,
+                voicePriority);
 
             var mixer = new MixingSampleProvider(targetFormat)
             {
                 ReadFully = true
             };
+
+            // The mixer pulls its inputs in reverse insertion order, so the
+            // microphone is added last and therefore measured before the
+            // sounds it lowers are pulled in the same render block.
+            mixer.AddMixerInput(soundDucking);
             mixer.AddMixerInput(microphoneMeter);
-            mixer.MixerInputEnded += Mixer_MixerInputEnded;
+            soundMixer.MixerInputEnded += Mixer_MixerInputEnded;
 
             var outputSanitizer = new SampleBoundarySanitizer(mixer);
             var outputMeter = new MeteringSampleProvider(
@@ -520,6 +638,7 @@ public sealed class AudioMixEngine : IDisposable
                 microphoneBuffer,
                 microphoneMeter,
                 mixer,
+                soundMixer,
                 outputSanitizer,
                 outputMeter,
                 targetFormat,
@@ -658,7 +777,14 @@ public sealed class AudioMixEngine : IDisposable
             {
                 ReadFully = true
             };
-            var monitorSanitizer = new SampleBoundarySanitizer(monitorMixer);
+
+            // The monitor carries soundboard audio only, so the same Voice
+            // Priority gain applies to the whole monitor mix and the user
+            // hears a representative result.
+            var monitorDucking = new VoiceDuckingSampleProvider(
+                monitorMixer,
+                voicePriority);
+            var monitorSanitizer = new SampleBoundarySanitizer(monitorDucking);
             var monitorMeter = new MeteringSampleProvider(
                 monitorSanitizer,
                 GetSamplesPerNotification(monitorTargetFormat));
@@ -1148,7 +1274,7 @@ public sealed class AudioMixEngine : IDisposable
                 return;
             }
 
-            resources?.Mixer.RemoveMixerInput(session.VirtualBranch);
+            resources?.SoundMixer.RemoveMixerInput(session.VirtualBranch);
             var monitorBranch = session.DetachMonitorBranch();
             if (monitorBranch is not null)
             {
@@ -1163,6 +1289,12 @@ public sealed class AudioMixEngine : IDisposable
                     ? null
                     : activeSounds.Values.MaxBy(item => item.SessionId)?.SoundId;
             }
+
+            if (activeSounds.Count == 0)
+            {
+                playbackPaused = false;
+            }
+
             session.Dispose();
             ClearPlaybackDiagnostics();
             RaiseSoundPlaybackStateChanged(
@@ -1246,6 +1378,7 @@ public sealed class AudioMixEngine : IDisposable
         {
             DisposePipeline(pipeline);
         }
+        voicePriority.Reset();
         ResetPeakLevels();
 
         if (!leaveFaulted)
@@ -1254,12 +1387,33 @@ public sealed class AudioMixEngine : IDisposable
         }
     }
 
+    private bool SetPlaybackPausedCore(bool paused)
+    {
+        // Pausing is only meaningful while sessions exist. Once every session
+        // finishes or is stopped, playback returns to its normal state.
+        if (paused && activeSounds.Count == 0)
+        {
+            playbackPaused = false;
+            return false;
+        }
+
+        playbackPaused = paused;
+        foreach (var session in activeSounds.Values)
+        {
+            session.SetPaused(paused);
+        }
+
+        return playbackPaused;
+    }
+
     private void StopAllSoundsCore(bool raiseEvents)
     {
         foreach (var soundId in activeSounds.Keys.ToArray())
         {
             StopSoundCore(soundId, raiseEvents);
         }
+
+        playbackPaused = false;
     }
 
     private void StopSoundCore(Guid soundId, bool raiseEvent)
@@ -1276,12 +1430,17 @@ public sealed class AudioMixEngine : IDisposable
                 : activeSounds.Values.MaxBy(item => item.SessionId)?.SoundId;
         }
 
-        resources?.Mixer.RemoveMixerInput(session.VirtualBranch);
+        resources?.SoundMixer.RemoveMixerInput(session.VirtualBranch);
         var monitorBranch = session.DetachMonitorBranch();
         if (monitorBranch is not null)
         {
             resources?.Monitor?.Mixer.RemoveMixerInput(monitorBranch);
             monitorBranch.Dispose();
+        }
+
+        if (activeSounds.Count == 0)
+        {
+            playbackPaused = false;
         }
 
         session.Dispose();
@@ -1493,7 +1652,8 @@ public sealed class AudioMixEngine : IDisposable
             new AudioPeakLevelsEventArgs(
                 Volatile.Read(ref microphonePeak),
                 Volatile.Read(ref mixedOutputPeak),
-                Volatile.Read(ref monitorOutputPeak)));
+                Volatile.Read(ref monitorOutputPeak),
+                voicePriority.IsDucking));
     }
 
     private void SetState(AudioEngineState state)
@@ -1555,7 +1715,7 @@ public sealed class AudioMixEngine : IDisposable
         pipeline.Capture.DataAvailable -= Capture_DataAvailable;
         pipeline.Capture.RecordingStopped -= Capture_RecordingStopped;
         pipeline.Output.PlaybackStopped -= Output_PlaybackStopped;
-        pipeline.Mixer.MixerInputEnded -= Mixer_MixerInputEnded;
+        pipeline.SoundMixer.MixerInputEnded -= Mixer_MixerInputEnded;
         pipeline.MicrophoneMeter.StreamVolume -=
             MicrophoneMeter_StreamVolume;
         pipeline.OutputMeter.StreamVolume -= OutputMeter_StreamVolume;
@@ -1616,6 +1776,7 @@ public sealed class AudioMixEngine : IDisposable
             BufferedWaveProvider microphoneBuffer,
             MeteringSampleProvider microphoneMeter,
             MixingSampleProvider mixer,
+            MixingSampleProvider soundMixer,
             SampleBoundarySanitizer outputSanitizer,
             MeteringSampleProvider outputMeter,
             WaveFormat targetFormat,
@@ -1628,6 +1789,7 @@ public sealed class AudioMixEngine : IDisposable
             MicrophoneBuffer = microphoneBuffer;
             MicrophoneMeter = microphoneMeter;
             Mixer = mixer;
+            SoundMixer = soundMixer;
             OutputSanitizer = outputSanitizer;
             OutputMeter = outputMeter;
             TargetFormat = targetFormat;
@@ -1647,6 +1809,12 @@ public sealed class AudioMixEngine : IDisposable
         public MeteringSampleProvider MicrophoneMeter { get; }
 
         public MixingSampleProvider Mixer { get; }
+
+        /// <summary>
+        /// Sub-mix of decoded sound sessions only. Voice Priority lowers this
+        /// branch; the microphone is mixed in afterwards at unity.
+        /// </summary>
+        public MixingSampleProvider SoundMixer { get; }
 
         public SampleBoundarySanitizer OutputSanitizer { get; }
 
@@ -1724,6 +1892,7 @@ public sealed class AudioMixEngine : IDisposable
             }
 
             RunCleanupWithoutThrow(MicrophoneBuffer.ClearBuffer);
+            RunCleanupWithoutThrow(SoundMixer.RemoveAllMixerInputs);
             RunCleanupWithoutThrow(Mixer.RemoveAllMixerInputs);
             DisposeWithoutThrow(Monitor);
             Monitor = null;

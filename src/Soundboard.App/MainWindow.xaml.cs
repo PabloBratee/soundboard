@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
@@ -138,6 +139,15 @@ public partial class MainWindow : Window
     private CheckBox GlobalHotkeysCheckBox =>
         settingsWindow.GlobalHotkeysCheckBox;
 
+    private ComboBox VoiceSensitivityComboBox =>
+        settingsWindow.VoiceSensitivityComboBox;
+
+    private ComboBox VoiceDuckingStrengthComboBox =>
+        settingsWindow.VoiceDuckingStrengthComboBox;
+
+    private TextBlock VoicePriorityStateTextBlock =>
+        settingsWindow.VoicePriorityStateTextBlock;
+
     private CheckBox UseDefaultMicrophoneCheckBox =>
         settingsWindow.UseDefaultMicrophoneCheckBox;
 
@@ -158,6 +168,15 @@ public partial class MainWindow : Window
 
     private Button ClearStopHotkeyButton =>
         settingsWindow.ClearStopHotkeyButton;
+
+    private Button ClearPauseHotkeyButton =>
+        settingsWindow.ClearPauseHotkeyButton;
+
+    private TextBlock PauseHotkeyDisplayTextBlock =>
+        settingsWindow.PauseHotkeyDisplayTextBlock;
+
+    private TextBlock PauseHotkeyStateTextBlock =>
+        settingsWindow.PauseHotkeyStateTextBlock;
 
     private TextBox DiagnosticStatusTextBox =>
         settingsWindow.DiagnosticStatusTextBox;
@@ -240,6 +259,12 @@ public partial class MainWindow : Window
             GlobalHotkeysCheckBox_Changed;
         GlobalHotkeysCheckBox.Unchecked +=
             GlobalHotkeysCheckBox_Changed;
+        VoicePriorityCheckBox.Checked += VoicePriorityCheckBox_Changed;
+        VoicePriorityCheckBox.Unchecked += VoicePriorityCheckBox_Changed;
+        VoiceSensitivityComboBox.SelectionChanged +=
+            VoicePriorityComboBox_SelectionChanged;
+        VoiceDuckingStrengthComboBox.SelectionChanged +=
+            VoicePriorityComboBox_SelectionChanged;
 
         // Settings-window commands are wired here rather than in that
         // window's XAML so all application logic stays in one place.
@@ -250,6 +275,9 @@ public partial class MainWindow : Window
         settingsWindow.AssignStopHotkeyButton.Click +=
             AssignStopHotkeyButton_Click;
         ClearStopHotkeyButton.Click += ClearStopHotkeyButton_Click;
+        settingsWindow.AssignPauseHotkeyButton.Click +=
+            AssignPauseHotkeyButton_Click;
+        ClearPauseHotkeyButton.Click += ClearPauseHotkeyButton_Click;
         settingsWindow.StoragePathsTextBox.Text = string.Join(
             Environment.NewLine,
             $"Library:        {soundLibraryStore.RootPath}",
@@ -385,6 +413,13 @@ public partial class MainWindow : Window
                 appSettings.StopSoundHotkey);
         }
 
+        if (appSettings.PauseResumeHotkey is not null)
+        {
+            hotkeyService.LoadPersistedBinding(
+                HotkeyTarget.PauseResumePlayback,
+                appSettings.PauseResumeHotkey);
+        }
+
         UpdateHotkeyPresentation();
         var unavailable = hotkeyService.Statuses
             .Where(
@@ -424,6 +459,13 @@ public partial class MainWindow : Window
                 appSettings.MonitorVolume * 100d;
             GlobalHotkeysCheckBox.IsChecked =
                 appSettings.GlobalHotkeysEnabled;
+            VoicePriorityCheckBox.IsChecked =
+                appSettings.VoicePriorityEnabled;
+            VoiceSensitivityComboBox.SelectedIndex =
+                (int)appSettings.VoicePrioritySensitivity;
+            VoiceDuckingStrengthComboBox.SelectedIndex =
+                (int)appSettings.VoicePriorityStrength;
+            ApplyVoicePriorityToEngine();
             audioEngine.SoundVolume = AudioGain.FromPercent(
                 appSettings.SoundVolume * 100d);
             audioEngine.MonitorVolume = AudioGain.FromPercent(
@@ -1146,6 +1188,72 @@ public partial class MainWindow : Window
         ScheduleSettingsSave();
     }
 
+    private void VoicePriorityCheckBox_Changed(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (isApplyingSettings)
+        {
+            return;
+        }
+
+        UpdateSettingsFromUi();
+        ApplyVoicePriorityToEngine();
+        ScheduleSettingsSave();
+        StatusTextBlock.Text = appSettings.VoicePriorityEnabled
+            ? "Voice Priority is on. Sounds are lowered automatically while "
+                + "you speak."
+            : "Voice Priority is off. Sounds keep their configured volume.";
+        RefreshDiagnosticStatus();
+    }
+
+    private void VoicePriorityComboBox_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs eventArgs)
+    {
+        if (isApplyingSettings)
+        {
+            return;
+        }
+
+        UpdateSettingsFromUi();
+        ApplyVoicePriorityToEngine();
+        ScheduleSettingsSave();
+        RefreshDiagnosticStatus();
+    }
+
+    /// <summary>
+    /// Pushes the current Voice Priority choice into the running engine. The
+    /// engine keeps the setting across device reconnects, so no audio restart
+    /// is needed and playback is never interrupted.
+    /// </summary>
+    private void ApplyVoicePriorityToEngine()
+    {
+        var settings = CurrentVoicePrioritySettings;
+        audioEngine.VoicePriority = settings;
+        VoicePriorityStateTextBlock.Text = settings.Enabled
+            ? $"Voice Priority is on. Sounds drop by "
+                + $"{-settings.DuckingDb:0} dB while speech is above "
+                + $"{settings.EngageThresholdDb:0} dBFS."
+            : "Voice Priority is off.";
+        if (!settings.Enabled)
+        {
+            VoicePriorityStatusTextBlock.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private VoicePrioritySettings CurrentVoicePrioritySettings =>
+        new(
+            VoicePriorityCheckBox.IsChecked == true,
+            (VoiceSensitivity)Math.Clamp(
+                VoiceSensitivityComboBox.SelectedIndex,
+                0,
+                2),
+            (VoiceDuckingStrength)Math.Clamp(
+                VoiceDuckingStrengthComboBox.SelectedIndex,
+                0,
+                2));
+
     /// <summary>
     /// Import always names a destination before any file is inspected. A
     /// selected user category is an unambiguous destination and is used
@@ -1426,6 +1534,72 @@ public partial class MainWindow : Window
         await StopCurrentSoundAsync(SoundTriggerSource.Mouse);
     }
 
+    private async void PausePlaybackButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await TogglePlaybackPauseAsync(SoundTriggerSource.Mouse);
+    }
+
+    /// <summary>
+    /// Flips the single global paused state. Only decoded sound sessions are
+    /// held; microphone passthrough, the audio service, and the device
+    /// connections keep running.
+    /// </summary>
+    private async Task TogglePlaybackPauseAsync(SoundTriggerSource source)
+    {
+        await soundTriggerGate.WaitAsync();
+        try
+        {
+            if (isClosing)
+            {
+                return;
+            }
+
+            lastSoundTriggerSource = source;
+            if (!audioEngine.CanPausePlayback)
+            {
+                if (source == SoundTriggerSource.Hotkey)
+                {
+                    lastHotkeyAction = "Pause/Resume playback (no sound)";
+                }
+
+                StatusTextBlock.Text =
+                    "There is no sound to pause. The microphone remains "
+                    + "active.";
+                return;
+            }
+
+            var paused = await Task.Run(audioEngine.TogglePlaybackPause);
+            if (source == SoundTriggerSource.Hotkey)
+            {
+                lastHotkeyAction = paused
+                    ? "Pause playback"
+                    : "Resume playback";
+            }
+
+            StatusTextBlock.Text = paused
+                ? "Sounds are paused at their current position. The "
+                    + "microphone keeps running."
+                : "Sounds resumed from their paused position.";
+        }
+        catch (Exception exception)
+        {
+            var message =
+                $"Playback could not be paused or resumed: {exception.Message}";
+            ErrorTextBlock.Text = message;
+            StatusTextBlock.Text =
+                "The requested sound action did not complete.";
+            lastDiagnosticMessage = message;
+        }
+        finally
+        {
+            soundTriggerGate.Release();
+            UpdateControlAvailability();
+            RefreshDiagnosticStatus();
+        }
+    }
+
     private async Task TriggerSoundAsync(
         Guid soundId,
         SoundTriggerSource source)
@@ -1601,15 +1775,19 @@ public partial class MainWindow : Window
                 return;
             }
 
-            if (eventArgs.Target.Kind == HotkeyTargetKind.StopSound)
+            switch (eventArgs.Target.Kind)
             {
-                await StopCurrentSoundAsync(SoundTriggerSource.Hotkey);
-            }
-            else
-            {
-                await TriggerSoundAsync(
-                    eventArgs.Target.SoundId,
-                    SoundTriggerSource.Hotkey);
+                case HotkeyTargetKind.StopSound:
+                    await StopCurrentSoundAsync(SoundTriggerSource.Hotkey);
+                    break;
+                case HotkeyTargetKind.PauseResumePlayback:
+                    await TogglePlaybackPauseAsync(SoundTriggerSource.Hotkey);
+                    break;
+                default:
+                    await TriggerSoundAsync(
+                        eventArgs.Target.SoundId,
+                        SoundTriggerSource.Hotkey);
+                    break;
             }
         }
         catch (Exception exception)
@@ -1926,6 +2104,105 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void AssignPauseHotkeyButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        var dialog = new HotkeyAssignmentDialog(
+            "Application action: Pause/Resume playback",
+            appSettings.PauseResumeHotkey)
+        {
+            Owner = this
+        };
+        if (!ShowHotkeyAssignmentDialog(dialog))
+        {
+            return;
+        }
+
+        await ApplyPauseHotkeyAsync(
+            dialog.ClearRequested
+                ? null
+                : dialog.ProposedHotkey);
+    }
+
+    private async void ClearPauseHotkeyButton_Click(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        await ApplyPauseHotkeyAsync(null);
+    }
+
+    private async Task ApplyPauseHotkeyAsync(HotkeyGesture? proposed)
+    {
+        if (hotkeyService is null)
+        {
+            ShowUiError("The global-hotkey service is not initialized.");
+            return;
+        }
+
+        var conflict = FindLocalHotkeyConflict(
+            HotkeyTarget.PauseResumePlayback,
+            proposed);
+        if (conflict is not null)
+        {
+            ShowUiError(conflict);
+            return;
+        }
+
+        var previous = appSettings.PauseResumeHotkey;
+        if (!hotkeyService.TryReplaceBinding(
+                HotkeyTarget.PauseResumePlayback,
+                proposed,
+                out var registrationError))
+        {
+            lastHotkeyRegistrationError =
+                registrationError ?? "Unknown registration failure.";
+            ShowUiError(lastHotkeyRegistrationError);
+            UpdateHotkeyPresentation();
+            return;
+        }
+
+        try
+        {
+            var updatedSettings = appSettings with
+            {
+                PauseResumeHotkey = proposed
+            };
+            settingsSaveDelayCancellation?.Cancel();
+            settingsSaveDelayCancellation?.Dispose();
+            settingsSaveDelayCancellation = null;
+            await settingsStore.SaveAsync(updatedSettings);
+            appSettings = updatedSettings;
+            ErrorTextBlock.Text = string.Empty;
+            StatusTextBlock.Text = proposed is null
+                ? "Cleared the Pause/Resume playback hotkey."
+                : $"Assigned {proposed.DisplayText} to Pause/Resume playback "
+                    + "and registered it with Windows.";
+            lastHotkeyAction = proposed is null
+                ? "Cleared Pause/Resume playback hotkey"
+                : $"Assigned {proposed.DisplayText} to Pause/Resume playback";
+        }
+        catch (Exception exception)
+        {
+            hotkeyService.TryReplaceBinding(
+                HotkeyTarget.PauseResumePlayback,
+                previous,
+                out var rollbackError);
+            if (rollbackError is not null)
+            {
+                lastHotkeyRegistrationError = rollbackError;
+            }
+
+            ShowUiError(
+                "The Pause/Resume playback hotkey could not be saved: "
+                + exception.Message);
+        }
+        finally
+        {
+            UpdateHotkeyPresentation();
+        }
+    }
+
     private string? FindLocalHotkeyConflict(
         HotkeyTarget target,
         HotkeyGesture? proposed)
@@ -1940,6 +2217,13 @@ public partial class MainWindow : Window
         {
             return $"{proposed.DisplayText} is already assigned to "
                 + "Stop Sound.";
+        }
+
+        if (target != HotkeyTarget.PauseResumePlayback
+            && appSettings.PauseResumeHotkey == proposed)
+        {
+            return $"{proposed.DisplayText} is already assigned to "
+                + "Pause/Resume playback.";
         }
 
         foreach (var tile in soundTiles)
@@ -3869,6 +4153,14 @@ public partial class MainWindow : Window
                 MonitorPeakProgressBar.Value = monitorOutputPeak;
                 MonitorPeakTextBlock.Text =
                     $"{monitorOutputPeak:P0}";
+
+                // Informational only. The meter notifications already arrive
+                // from the engine, so the live status needs no UI timer and
+                // the audio path never waits for WPF.
+                VoicePriorityStatusTextBlock.Visibility =
+                    eventArgs.VoiceDuckingActive
+                        ? Visibility.Visible
+                        : Visibility.Collapsed;
             });
     }
 
@@ -4156,9 +4448,36 @@ public partial class MainWindow : Window
         StopSoundButton.IsEnabled =
             state == AudioEngineState.Running
             && audioEngine.IsSoundPlaying;
+        UpdatePlaybackTransportPresentation(state);
         UpdateCategoryControlAvailability();
         UpdateMonitorStatusForSelection();
         UpdateStatusChips();
+    }
+
+    /// <summary>
+    /// Keeps the transport button in step with the one global paused state.
+    /// The button is disabled whenever there is no session to pause, and the
+    /// interface returns to its normal unpaused state once every session
+    /// finishes or is stopped.
+    /// </summary>
+    private void UpdatePlaybackTransportPresentation(AudioEngineState state)
+    {
+        var paused = audioEngine.IsPlaybackPaused;
+        PausePlaybackButton.IsEnabled =
+            state == AudioEngineState.Running
+            && audioEngine.CanPausePlayback;
+        PausePlaybackTextBlock.Text = paused
+            ? "Resume sounds"
+            : "Pause sounds";
+        PausePlaybackGlyph.Text = paused
+            ? "\uE768"
+            : "\uE769";
+        PausePlaybackButton.ToolTip = paused
+            ? "Resume every paused sound from its exact position."
+            : "Pause the sounds that are playing. The microphone keeps running.";
+        AutomationProperties.SetName(
+            PausePlaybackButton,
+            paused ? "Resume sounds" : "Pause sounds");
     }
 
     private void UpdateLibraryPresentation()
@@ -4338,6 +4657,14 @@ public partial class MainWindow : Window
                 : "Assigned · registration pending";
             ClearStopHotkeyButton.IsEnabled =
                 appSettings.StopSoundHotkey is not null;
+            PauseHotkeyDisplayTextBlock.Text =
+                appSettings.PauseResumeHotkey?.DisplayText ?? "No hotkey";
+            PauseHotkeyStateTextBlock.Text =
+                appSettings.PauseResumeHotkey is null
+                    ? "Not assigned"
+                    : "Assigned · registration pending";
+            ClearPauseHotkeyButton.IsEnabled =
+                appSettings.PauseResumeHotkey is not null;
             RetryHotkeysButton.IsEnabled = false;
             return;
         }
@@ -4391,6 +4718,23 @@ public partial class MainWindow : Window
         };
         StopHotkeyStateTextBlock.ToolTip = stopStatus.Error;
         ClearStopHotkeyButton.IsEnabled = stopStatus.Hotkey is not null;
+
+        var pauseStatus =
+            hotkeyService.GetStatus(HotkeyTarget.PauseResumePlayback);
+        PauseHotkeyDisplayTextBlock.Text =
+            pauseStatus.Hotkey?.DisplayText ?? "No hotkey";
+        PauseHotkeyStateTextBlock.Text = pauseStatus.State switch
+        {
+            HotkeyRegistrationState.Registered =>
+                "Assigned · registered",
+            HotkeyRegistrationState.Unavailable =>
+                "Assigned · unavailable",
+            HotkeyRegistrationState.Disabled =>
+                "Assigned · global hotkeys disabled",
+            _ => "Not assigned"
+        };
+        PauseHotkeyStateTextBlock.ToolTip = pauseStatus.Error;
+        ClearPauseHotkeyButton.IsEnabled = pauseStatus.Hotkey is not null;
 
         HotkeyStatusTextBlock.Text = hotkeyService.Enabled
             ? $"{assignedSoundCount} sound hotkey(s) assigned; "
@@ -4560,6 +4904,9 @@ public partial class MainWindow : Window
             .ToArray();
         var stopHotkeyStatus = hotkeyService?.GetStatus(
             HotkeyTarget.StopSound);
+        var pauseHotkeyStatus = hotkeyService?.GetStatus(
+            HotkeyTarget.PauseResumePlayback);
+        var voicePrioritySettings = audioEngine.VoicePriority;
 
         var lines = new List<string>
         {
@@ -4582,6 +4929,23 @@ public partial class MainWindow : Window
                     ? "Windows default communications microphone"
                     : "Pinned endpoint"),
             $"Sound master gain: {AudioGain.FromPercent(appSettings.SoundVolume * 100d):P0}",
+            $"Playback paused: {YesNo(audioEngine.IsPlaybackPaused)}",
+            $"Voice Priority enabled: "
+                + $"{YesNo(appSettings.VoicePriorityEnabled)}",
+            $"Voice Priority sensitivity: "
+                + $"{appSettings.VoicePrioritySensitivity} "
+                + $"({voicePrioritySettings.EngageThresholdDb:0} dBFS engage, "
+                + $"{voicePrioritySettings.DisengageThresholdDb:0} dBFS release)",
+            $"Voice Priority strength: {appSettings.VoicePriorityStrength} "
+                + $"({voicePrioritySettings.DuckingDb:0} dB, "
+                + $"gain {voicePrioritySettings.DuckingGain:0.000})",
+            $"Voice Priority currently lowering sounds: "
+                + $"{YesNo(audioEngine.IsVoiceDuckingActive)}",
+            $"Pause/Resume hotkey state: "
+                + $"{pauseHotkeyStatus?.State.ToString() ?? "NotAssigned"}"
+                + (pauseHotkeyStatus?.Hotkey is null
+                    ? string.Empty
+                    : $" ({pauseHotkeyStatus.Hotkey.DisplayText})"),
             $"Assigned sound hotkeys: "
                 + $"{soundTiles.Count(tile => tile.Sound.Hotkey is not null)}",
             $"Registered sound hotkeys: "
@@ -4801,6 +5165,12 @@ public partial class MainWindow : Window
             MonitorVolume = MonitorVolumeSlider.Value / 100d,
             GlobalHotkeysEnabled =
                 GlobalHotkeysCheckBox.IsChecked == true,
+            VoicePriorityEnabled =
+                VoicePriorityCheckBox.IsChecked == true,
+            VoicePrioritySensitivity =
+                CurrentVoicePrioritySettings.Sensitivity,
+            VoicePriorityStrength =
+                CurrentVoicePrioritySettings.Strength,
             SoundVolume = SoundVolumeSlider.Value / 100d,
             WindowLeft = double.IsFinite(bounds.Left)
                 ? bounds.Left

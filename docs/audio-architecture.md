@@ -22,14 +22,14 @@ change Windows or per-application defaults.
 ## Current application path
 
 ```text
-Physical capture endpoint --WASAPI shared capture--+
-                                                    +--float mixer--boundary clamp--WASAPI shared render--> CABLE Input
-Decoded/trimmed/faded sound --per-sound x master---+
-                                                    +--monitor volume--boundary clamp--> physical headphones (optional)
+Physical capture endpoint --WASAPI shared capture--voice detector--+
+                                                                   +--float mixer--boundary clamp--WASAPI shared render--> CABLE Input
+Decoded/trimmed/faded sound --per-sound x master--sound sub-mix--voice-priority gain--+
+                                                                   +--monitor volume--boundary clamp--> physical headphones (optional)
 ```
 
-The microphone branch has unity application gain and never enters the monitor
-branch. Each sound decoder reaches end-of-stream once; a trigger for the same
+The microphone branch has unity application gain, never enters the monitor
+branch, and is never attenuated by Voice Priority. Each sound decoder reaches end-of-stream once; a trigger for the same
 sound replaces that sound's current session, while different sounds may mix
 concurrently. The only final processing replaces NaN/infinity with zero and
 clips samples outside `[-1, 1]`. It does not normalize or alter valid samples.
@@ -76,6 +76,48 @@ discontinuity, reaching exact silence or unity at the end of the transition.
 The physical microphone bypasses both gains. Preview uses the identical
 per-sound-times-master source gain, while monitoring adds only its explicit,
 separate monitor-volume gain.
+
+## Voice Priority
+
+Voice Priority is an opt-in, microphone-triggered ducking of soundboard
+playback only. The effective sound gain is:
+
+```text
+per-sound gain x soundboard master gain x voice-priority gain
+```
+
+A short-window RMS detector sits on the physical microphone branch after format
+normalization and before the mixer, so soundboard playback can never activate
+its own ducking. Engage thresholds are -30 dBFS (Low), -36 dBFS (Normal), and
+-42 dBFS (High); the detector releases only 6 dB below its engage threshold and
+holds for at least 200 ms, which prevents rapid toggling near the threshold.
+Ducking strengths are -6 dB, -12 dB, and -18 dB, converted with
+`gain = 10^(dB / 20)`.
+
+The gain itself is applied by a sample-rate-aware one-pole smoother whose
+10-90 % transition is 50 ms downward and 500 ms upward, so no click, step, or
+zipper noise is produced. Detection and smoothing run entirely inside the
+render pull with no allocation, logging, settings write, or dispatcher call;
+the "Speaking - sounds lowered" status rides along with the existing meter
+notifications and is informational only.
+
+A separate sound sub-mix carries every decoded session, so one gain lowers all
+of them together and a sound triggered mid-duck is already at the current
+level. The optional sound-only monitor carries soundboard audio only and
+receives the same gain. Nothing else changes: playback is never paused, sought,
+restarted, normalized, or compressed by Voice Priority.
+
+## Pause and resume
+
+One global paused state freezes decoded sound sessions. A paused branch returns
+silence to the mixer without reading its decoder, so its source position, trim
+position, fades, and gains are all preserved exactly and resuming continues
+from the same sample. Audio is never consumed and multiplied by zero.
+
+Microphone capture, passthrough, the render connection, and voice detection all
+continue while playback is paused. A sound triggered while paused starts at its
+normal beginning position and waits there. Stopping all sounds clears both the
+sessions and the paused state.
 
 ## API findings
 

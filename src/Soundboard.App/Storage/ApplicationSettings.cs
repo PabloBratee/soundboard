@@ -1,4 +1,6 @@
 using Soundboard.App.Hotkeys;
+using Soundboard.Audio;
+
 namespace Soundboard.App.Storage;
 
 public sealed record ApplicationSettings
@@ -24,9 +26,27 @@ public sealed record ApplicationSettings
 
     public double MonitorVolume { get; init; } = 1d;
 
+    /// <summary>
+    /// Opt-in for every installation, including upgrades: a settings file
+    /// written before Voice Priority existed keeps the previous behavior.
+    /// </summary>
+    public bool VoicePriorityEnabled { get; init; }
+
+    public VoiceSensitivity VoicePrioritySensitivity { get; init; } =
+        VoiceSensitivity.Normal;
+
+    public VoiceDuckingStrength VoicePriorityStrength { get; init; } =
+        VoiceDuckingStrength.Balanced;
+
     public bool GlobalHotkeysEnabled { get; init; } = true;
 
     public HotkeyGesture? StopSoundHotkey { get; init; }
+
+    /// <summary>
+    /// Optional and unassigned by default so no shortcut can collide with a
+    /// game or with Windows until the user chooses one.
+    /// </summary>
+    public HotkeyGesture? PauseResumeHotkey { get; init; }
 
     public double? WindowLeft { get; init; }
 

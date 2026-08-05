@@ -24,13 +24,20 @@ public sealed class AudioEngineErrorEventArgs(
 public sealed class AudioPeakLevelsEventArgs(
     float microphonePeak,
     float mixedOutputPeak,
-    float monitorOutputPeak) : EventArgs
+    float monitorOutputPeak,
+    bool voiceDuckingActive = false) : EventArgs
 {
     public float MicrophonePeak { get; } = microphonePeak;
 
     public float MixedOutputPeak { get; } = mixedOutputPeak;
 
     public float MonitorOutputPeak { get; } = monitorOutputPeak;
+
+    /// <summary>
+    /// True while Voice Priority is lowering sounds. Carried with the
+    /// existing meter notifications so the status needs no extra timer.
+    /// </summary>
+    public bool VoiceDuckingActive { get; } = voiceDuckingActive;
 }
 
 public enum SoundPlaybackChangeReason

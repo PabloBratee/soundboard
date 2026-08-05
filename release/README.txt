@@ -1,4 +1,4 @@
-SOUNDBOARD 1.2.2 FOR WINDOWS X64
+SOUNDBOARD 1.3.0 FOR WINDOWS X64
 ================================
 
 Soundboard is a local Windows soundboard with virtual microphone mixing.
@@ -18,7 +18,7 @@ INSTALLATION
 ------------
 
 Installer:
-Run Soundboard-Setup-v1.2.2-win-x64.exe. The per-user installer's Select
+Run Soundboard-Setup-v1.3.0-win-x64.exe. The per-user installer's Select
 Destination Location page displays this recommended default:
 
 %LOCALAPPDATA%\Programs\Soundboard
@@ -46,6 +46,24 @@ endpoint changes. In Discord or a game, select CABLE Output once as the input.
 The sound library starts empty. Soundboard includes no audio content and does
 not seed, download, or suggest sounds; use Import Sounds to add audio files you
 are authorized to use.
+
+VOICE PRIORITY AND PAUSE
+------------------------
+
+Voice Priority automatically lowers sounds while you speak so your microphone
+stays clearly audible. Only the selected physical microphone is measured, and
+only soundboard sounds are lowered; your microphone keeps its normal level.
+It is off until you turn it on with the Voice Priority toggle next to the
+master volume. Voice sensitivity (Low, Normal, High) and ducking strength
+(Light, Balanced, Strong) are in Settings, and default to Normal and Balanced.
+
+Pause sounds holds every playing sound at its exact position; Resume sounds
+continues from the same place. Microphone passthrough keeps running while
+sounds are paused. An optional global Pause/Resume playback hotkey can be
+assigned in Settings; none is assigned by default.
+
+Soundboard does not change Windows volume, microphone hardware gain, VB-CABLE,
+Discord, or game settings to do any of this.
 
 ORGANIZING SOUNDS
 -----------------
@@ -107,7 +125,7 @@ Soundboard.exe and the installer are currently unsigned. Windows SmartScreen
 or an Unknown Publisher warning may appear. Future public distribution should
 use a trusted Authenticode certificate with timestamping.
 
-Soundboard 1.2.2 does not include automatic updates or background update
+Soundboard 1.3.0 does not include automatic updates or background update
 checks.
 
 PROJECT LICENSE

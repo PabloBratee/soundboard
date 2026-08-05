@@ -223,6 +223,27 @@
                 <StackPanel Grid.Column="3"
                             VerticalAlignment="Center"
                             Orientation="Horizontal">
+                    <Button x:Name="PausePlaybackButton"
+                            MinWidth="132"
+                            Margin="0,0,10,0"
+                            Click="PausePlaybackButton_Click"
+                            Style="{StaticResource SecondaryButtonStyle}"
+                            ToolTip="Pause the sounds that are playing. The microphone keeps running."
+                            AutomationProperties.Name="Pause sounds">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="PausePlaybackGlyph"
+                                       Margin="0,0,7,0"
+                                       VerticalAlignment="Center"
+                                       FontFamily="{StaticResource IconFontFamily}"
+                                       FontSize="12"
+                                       Text="&#xE769;" />
+                            <TextBlock x:Name="PausePlaybackTextBlock"
+                                       VerticalAlignment="Center"
+                                       FontWeight="SemiBold"
+                                       Text="Pause sounds" />
+                        </StackPanel>
+                    </Button>
+
                     <Button x:Name="StopSoundButton"
                             MinWidth="118"
                             Click="StopSoundButton_Click"
@@ -1219,6 +1240,26 @@
                                    Text="Monitor: off"
                                    TextWrapping="NoWrap"
                                    ToolTip="Headphone monitoring state" />
+                    </Border>
+                    <Border Style="{StaticResource StatusChipStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <CheckBox x:Name="VoicePriorityCheckBox"
+                                      VerticalAlignment="Center"
+                                      Content="Voice Priority"
+                                      ToolTip="Automatically lowers sounds while you speak"
+                                      AutomationProperties.Name="Voice Priority"
+                                      AutomationProperties.HelpText="Automatically lowers sounds while you speak" />
+                            <TextBlock x:Name="VoicePriorityStatusTextBlock"
+                                       Margin="10,0,0,0"
+                                       VerticalAlignment="Center"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Style="{StaticResource CaptionTextStyle}"
+                                       Text="Speaking — sounds lowered"
+                                       TextWrapping="NoWrap"
+                                       Visibility="Collapsed"
+                                       AutomationProperties.LiveSetting="Polite" />
+                        </StackPanel>
                     </Border>
                     <TextBlock Margin="4,0,7,0"
                                VerticalAlignment="Center"

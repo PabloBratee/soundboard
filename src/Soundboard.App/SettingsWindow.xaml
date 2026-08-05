@@ -136,6 +136,59 @@
                         <Border Style="{StaticResource SettingsGroupStyle}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="VOICE PRIORITY" />
+                                <TextBlock Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Automatically lowers sounds while you speak. Turn Voice Priority on or off from the main window; your microphone is never lowered." />
+                                <TextBlock x:Name="VoicePriorityStateTextBlock"
+                                           Margin="0,6,0,0"
+                                           Style="{StaticResource CaptionTextStyle}"
+                                           Text="Voice Priority is off." />
+
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               Text="Voice sensitivity" />
+                                    <ComboBox x:Name="VoiceSensitivityComboBox"
+                                              Grid.Column="1"
+                                              SelectedIndex="1"
+                                              AutomationProperties.Name="Voice sensitivity">
+                                        <ComboBoxItem Content="Low — engages around -30 dBFS" />
+                                        <ComboBoxItem Content="Normal — engages around -36 dBFS" />
+                                        <ComboBoxItem Content="High — engages around -42 dBFS" />
+                                    </ComboBox>
+                                </Grid>
+
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource SecondaryTextStyle}"
+                                               Text="Ducking strength" />
+                                    <ComboBox x:Name="VoiceDuckingStrengthComboBox"
+                                              Grid.Column="1"
+                                              SelectedIndex="1"
+                                              AutomationProperties.Name="Ducking strength">
+                                        <ComboBoxItem Content="Light — sounds drop by 6 dB" />
+                                        <ComboBoxItem Content="Balanced — sounds drop by 12 dB" />
+                                        <ComboBoxItem Content="Strong — sounds drop by 18 dB" />
+                                    </ComboBox>
+                                </Grid>
+
+                                <TextBlock Margin="0,12,0,0"
+                                           Style="{StaticResource MutedTextStyle}"
+                                           Text="Sounds fade down over 50 ms, stay lowered for at least 200 ms, and return over 500 ms. Playback is never paused, restarted, normalized, or compressed." />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
                                            Text="SOUNDBOARD MICROPHONE" />
                                 <TextBlock Style="{StaticResource FieldLabelStyle}"
                                            Text="VB-CABLE connection" />
@@ -343,6 +396,46 @@
                                                 Content="Clear"
                                                 Style="{StaticResource DangerButtonStyle}"
                                                 AutomationProperties.Name="Clear Stop Sound hotkey" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource SettingsGroupStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionHeadingTextStyle}"
+                                           Text="PAUSE/RESUME PLAYBACK HOTKEY" />
+                                <TextBlock Margin="0,0,0,10"
+                                           Style="{StaticResource SecondaryTextStyle}"
+                                           Text="Optional and unassigned by default. Pausing holds every playing sound at its exact position; your microphone keeps running." />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <Border HorizontalAlignment="Left"
+                                                Style="{StaticResource KeyCapChipStyle}">
+                                            <TextBlock x:Name="PauseHotkeyDisplayTextBlock"
+                                                       Style="{StaticResource KeyCapTextStyle}"
+                                                       Text="No hotkey" />
+                                        </Border>
+                                        <TextBlock x:Name="PauseHotkeyStateTextBlock"
+                                                   Margin="0,6,0,0"
+                                                   Style="{StaticResource MutedTextStyle}"
+                                                   Text="Not assigned" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1"
+                                                VerticalAlignment="Center"
+                                                Orientation="Horizontal">
+                                        <Button x:Name="AssignPauseHotkeyButton"
+                                                Content="Assign hotkey"
+                                                AutomationProperties.Name="Assign Pause/Resume playback hotkey" />
+                                        <Button x:Name="ClearPauseHotkeyButton"
+                                                Margin="8,0,0,0"
+                                                Content="Clear"
+                                                Style="{StaticResource DangerButtonStyle}"
+                                                AutomationProperties.Name="Clear Pause/Resume playback hotkey" />
                                     </StackPanel>
                                 </Grid>
                             </StackPanel>

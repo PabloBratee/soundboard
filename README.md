@@ -28,6 +28,11 @@ uses no telemetry or cloud storage, and does not access the network.
 - Inline category creation, renaming, and deletion in the sidebar
 - Tile accents and other tile personalization
 - Windows global hotkeys using registered keys or key combinations
+- Voice Priority: automatic microphone-triggered ducking that lowers sounds
+  while you speak, with Low/Normal/High sensitivity and Light/Balanced/Strong
+  strength
+- Pause and resume playback from the main window or an optional global hotkey,
+  with microphone passthrough continuing while sounds are paused
 - One-shot playback with concurrent sounds; re-triggering the same sound
   restarts it from the beginning
 - Non-destructive trimming, fade-in, and fade-out
@@ -66,14 +71,14 @@ Releases page](https://github.com/PabloBratee/soundboard/releases).
 
 ### Installer
 
-Run `Soundboard-Setup-v1.2.2-win-x64.exe`. The installer is per-user and shows
+Run `Soundboard-Setup-v1.3.0-win-x64.exe`. The installer is per-user and shows
 a destination page, so the installation folder can be changed. Its normal
 default under the current user's local application-data folder does not require
 administrator rights.
 
 ### Portable ZIP
 
-Extract `Soundboard-v1.2.2-win-x64-portable.zip` to a writable folder and run
+Extract `Soundboard-v1.3.0-win-x64-portable.zip` to a writable folder and run
 `Soundboard\Soundboard.exe`. Portable mode removes the installer requirement;
 user data still stays under `%LOCALAPPDATA%\Soundboard`.
 
@@ -102,6 +107,31 @@ Soundboard does not change Discord or Windows audio settings.
 
 Optionally enable sound-only monitoring in Soundboard and select a physical
 headset or speakers. Microphone audio is never sent to this monitor path.
+
+## Voice Priority and pause
+
+Voice Priority automatically lowers sounds while you speak, so your physical
+microphone stays clearly audible in Discord or a game. It analyses the selected
+physical microphone only, before it is mixed with soundboard playback, so
+soundboard audio can never trigger its own ducking. Your microphone keeps its
+existing unity application gain; only the decoded sounds and the optional
+sound-only monitor are lowered, and they return to their configured volume
+when you stop speaking.
+
+Voice Priority is off until you turn it on, including after an update. The
+toggle sits next to the master volume; sensitivity and strength are in
+Settings. Defaults are Normal sensitivity (-36 dBFS) and Balanced strength
+(-12 dB).
+
+Pause sounds holds every playing sound at its exact position and resumes from
+the same sample. Microphone passthrough, the audio service, and the device
+connections keep running while playback is paused. A global hotkey for
+Pause/Resume playback can be assigned in Settings; none is assigned by
+default.
+
+Soundboard does not change Windows volume, endpoint volume, microphone
+hardware gain, communication-session ducking, VB-CABLE, Discord, or game
+settings to achieve this.
 
 ## Privacy
 
@@ -170,8 +200,8 @@ as a normal executable.
 Inno Setup 7 is required to build the installer. From a clean checkout:
 
 ```powershell
-.\build\package.ps1 -Version 1.2.2
-.\build\verify-package.ps1 -Version 1.2.2
+.\build\package.ps1 -Version 1.3.0
+.\build\verify-package.ps1 -Version 1.3.0
 ```
 
 The packaging script restores, builds, format-checks, runs tests and the custom

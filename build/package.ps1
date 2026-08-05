@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$Version = '1.2.2',
+    [string]$Version = '1.3.0',
 
     [switch]$SkipTests,
 
@@ -403,7 +403,7 @@ try {
     $portableReadme = (
         Get-Content -LiteralPath (
             Join-Path $releaseSource 'README.txt') -Raw
-    ).Replace('1.2.2', $Version)
+    ).Replace('1.3.0', $Version)
     Set-Content -LiteralPath (
         Join-Path $portableRoot 'README.txt') -Value $portableReadme -Encoding utf8
     Copy-Item -LiteralPath (

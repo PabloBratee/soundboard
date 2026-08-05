@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using Soundboard.App.Hotkeys;
+using Soundboard.Audio;
 
 namespace Soundboard.App.Storage;
 
@@ -193,6 +194,16 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
                 + hotkeyError);
         }
 
+        if (!HotkeyGesture.TryNormalize(
+                settings.PauseResumeHotkey,
+                out var pauseResumeHotkey,
+                out var pauseHotkeyError))
+        {
+            warnings.Add(
+                "The saved Pause/Resume playback hotkey is invalid and was "
+                + "ignored: " + pauseHotkeyError);
+        }
+
         warning = warnings.Count == 0
             ? null
             : string.Join(" ", warnings);
@@ -201,7 +212,16 @@ public sealed class ApplicationSettingsStore : IAsyncDisposable
             SchemaVersion = ApplicationSettings.CurrentSchemaVersion,
             SoundVolume = ValidateVolume(settings.SoundVolume),
             MonitorVolume = ValidateVolume(settings.MonitorVolume),
+            VoicePrioritySensitivity = Enum.IsDefined(
+                settings.VoicePrioritySensitivity)
+                    ? settings.VoicePrioritySensitivity
+                    : VoiceSensitivity.Normal,
+            VoicePriorityStrength = Enum.IsDefined(
+                settings.VoicePriorityStrength)
+                    ? settings.VoicePriorityStrength
+                    : VoiceDuckingStrength.Balanced,
             StopSoundHotkey = stopSoundHotkey,
+            PauseResumeHotkey = pauseResumeHotkey,
             WindowWidth = ValidateDimension(
                 settings.WindowWidth,
                 minimum: MinimumWindowWidth),

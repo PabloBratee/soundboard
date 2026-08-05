@@ -16,6 +16,7 @@ internal sealed class SoundPlaybackSession : IDisposable
     private readonly float perSoundGain;
     private float masterGain;
     private float monitorGain;
+    private bool paused;
     private bool disposed;
     private int authoritativeCompletionQueued;
     private int monitorCompletionQueued;
@@ -62,6 +63,21 @@ internal sealed class SoundPlaybackSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// True while this session is held at its exact current sample position
+    /// by the global paused state.
+    /// </summary>
+    public bool IsPaused
+    {
+        get
+        {
+            lock (syncRoot)
+            {
+                return paused;
+            }
+        }
+    }
+
     public void AttachMonitorBranch(SoundPlaybackBranch branch)
     {
         ArgumentNullException.ThrowIfNull(branch);
@@ -83,6 +99,22 @@ internal sealed class SoundPlaybackSession : IDisposable
             }
 
             monitorBranch = branch;
+            branch.SetPaused(paused);
+        }
+    }
+
+    /// <summary>
+    /// Freezes or continues both branches. A paused branch stops advancing
+    /// through its source data instead of playing silently, so resuming
+    /// continues from the exact previous sample position.
+    /// </summary>
+    public void SetPaused(bool value)
+    {
+        lock (syncRoot)
+        {
+            paused = value;
+            VirtualBranch.SetPaused(value);
+            monitorBranch?.SetPaused(value);
         }
     }
 
@@ -150,6 +182,7 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
     private readonly DecodedAudioSource decodedSource;
     private readonly SmoothGainSampleProvider gainProvider;
     private Exception? playbackError;
+    private bool paused;
     private bool disposed;
 
     public SoundPlaybackBranch(
@@ -243,6 +276,14 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
         }
     }
 
+    public void SetPaused(bool value)
+    {
+        lock (syncRoot)
+        {
+            paused = value;
+        }
+    }
+
     public int Read(float[] buffer, int offset, int count)
     {
         lock (syncRoot)
@@ -250,6 +291,15 @@ internal sealed class SoundPlaybackBranch : ISampleProvider, IDisposable
             if (disposed)
             {
                 return 0;
+            }
+
+            // A paused branch keeps its place in the mix and its exact source
+            // position: nothing is decoded, so no audio is consumed and
+            // silently discarded.
+            if (paused)
+            {
+                Array.Clear(buffer, offset, count);
+                return count;
             }
 
             try
