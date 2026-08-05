@@ -29,10 +29,12 @@ Decoded/trimmed/faded sound --per-sound x master--sound sub-mix--voice-priority 
 ```
 
 The microphone branch has unity application gain, never enters the monitor
-branch, and is never attenuated by Voice Priority. Each sound decoder reaches end-of-stream once; a trigger for the same
-sound replaces that sound's current session, while different sounds may mix
-concurrently. The only final processing replaces NaN/infinity with zero and
-clips samples outside `[-1, 1]`. It does not normalize or alter valid samples.
+branch, and is never attenuated by Voice Priority. Exactly one sound plays at a
+time: every trigger, from a tile click or a global hotkey, first ends and
+disposes the current session, then starts the new one from its beginning.
+Retriggering the same sound therefore restarts it, and sounds never overlap.
+The only final processing replaces NaN/infinity with zero and clips samples
+outside `[-1, 1]`. It does not normalize or alter valid samples.
 
 The internal service starts on application launch, follows the Windows default
 communications capture endpoint or a pinned endpoint ID, listens for endpoint
@@ -101,23 +103,24 @@ render pull with no allocation, logging, settings write, or dispatcher call;
 the "Speaking - sounds lowered" status rides along with the existing meter
 notifications and is informational only.
 
-A separate sound sub-mix carries every decoded session, so one gain lowers all
-of them together and a sound triggered mid-duck is already at the current
+A separate sound sub-mix carries the decoded session, so the gain applies to
+playback as a whole and a sound triggered mid-duck is already at the current
 level. The optional sound-only monitor carries soundboard audio only and
 receives the same gain. Nothing else changes: playback is never paused, sought,
 restarted, normalized, or compressed by Voice Priority.
 
 ## Pause and resume
 
-One global paused state freezes decoded sound sessions. A paused branch returns
-silence to the mixer without reading its decoder, so its source position, trim
-position, fades, and gains are all preserved exactly and resuming continues
-from the same sample. Audio is never consumed and multiplied by zero.
+One global paused state freezes the decoded sound session. A paused branch
+returns silence to the mixer without reading its decoder, so its source
+position, trim position, fades, and gains are all preserved exactly and
+resuming continues from the same sample. Audio is never consumed and multiplied by zero.
 
 Microphone capture, passthrough, the render connection, and voice detection all
-continue while playback is paused. A sound triggered while paused starts at its
-normal beginning position and waits there. Stopping all sounds clears both the
-sessions and the paused state.
+continue while playback is paused. Triggering a sound while paused replaces the
+paused session, which clears the paused state, so the new sound starts audible
+from its beginning. Stopping playback clears both the session and the paused
+state.
 
 ## API findings
 

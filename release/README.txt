@@ -1,4 +1,4 @@
-SOUNDBOARD 1.3.0 FOR WINDOWS X64
+SOUNDBOARD 1.3.1 FOR WINDOWS X64
 ================================
 
 Soundboard is a local Windows soundboard with virtual microphone mixing.
@@ -18,7 +18,7 @@ INSTALLATION
 ------------
 
 Installer:
-Run Soundboard-Setup-v1.3.0-win-x64.exe. The per-user installer's Select
+Run Soundboard-Setup-v1.3.1-win-x64.exe. The per-user installer's Select
 Destination Location page displays this recommended default:
 
 %LOCALAPPDATA%\Programs\Soundboard
@@ -125,7 +125,7 @@ Soundboard.exe and the installer are currently unsigned. Windows SmartScreen
 or an Unknown Publisher warning may appear. Future public distribution should
 use a trusted Authenticode certificate with timestamping.
 
-Soundboard 1.3.0 does not include automatic updates or background update
+Soundboard 1.3.1 does not include automatic updates or background update
 checks.
 
 PROJECT LICENSE

@@ -33,8 +33,8 @@ uses no telemetry or cloud storage, and does not access the network.
   strength
 - Pause and resume playback from the main window or an optional global hotkey,
   with microphone passthrough continuing while sounds are paused
-- One-shot playback with concurrent sounds; re-triggering the same sound
-  restarts it from the beginning
+- One-shot playback of one sound at a time; triggering another sound stops the
+  current one and starts the new one from the beginning
 - Non-destructive trimming, fade-in, and fade-out
 - Decoded waveform editing
 - Per-sound volume plus one soundboard master volume
@@ -71,14 +71,14 @@ Releases page](https://github.com/PabloBratee/soundboard/releases).
 
 ### Installer
 
-Run `Soundboard-Setup-v1.3.0-win-x64.exe`. The installer is per-user and shows
+Run `Soundboard-Setup-v1.3.1-win-x64.exe`. The installer is per-user and shows
 a destination page, so the installation folder can be changed. Its normal
 default under the current user's local application-data folder does not require
 administrator rights.
 
 ### Portable ZIP
 
-Extract `Soundboard-v1.3.0-win-x64-portable.zip` to a writable folder and run
+Extract `Soundboard-v1.3.1-win-x64-portable.zip` to a writable folder and run
 `Soundboard\Soundboard.exe`. Portable mode removes the installer requirement;
 user data still stays under `%LOCALAPPDATA%\Soundboard`.
 
@@ -123,9 +123,10 @@ toggle sits next to the master volume; sensitivity and strength are in
 Settings. Defaults are Normal sensitivity (-36 dBFS) and Balanced strength
 (-12 dB).
 
-Pause sounds holds every playing sound at its exact position and resumes from
+Pause sounds holds the playing sound at its exact position and resumes from
 the same sample. Microphone passthrough, the audio service, and the device
-connections keep running while playback is paused. A global hotkey for
+connections keep running while playback is paused. Triggering a sound while
+paused replaces the paused one and starts playing immediately. A global hotkey for
 Pause/Resume playback can be assigned in Settings; none is assigned by
 default.
 
@@ -200,8 +201,8 @@ as a normal executable.
 Inno Setup 7 is required to build the installer. From a clean checkout:
 
 ```powershell
-.\build\package.ps1 -Version 1.3.0
-.\build\verify-package.ps1 -Version 1.3.0
+.\build\package.ps1 -Version 1.3.1
+.\build\verify-package.ps1 -Version 1.3.1
 ```
 
 The packaging script restores, builds, format-checks, runs tests and the custom

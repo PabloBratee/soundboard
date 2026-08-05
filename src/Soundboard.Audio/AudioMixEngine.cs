@@ -324,7 +324,11 @@ public sealed class AudioMixEngine : IDisposable
                     "Start the audio engine before playing a sound.");
             }
 
-            StopSoundCore(soundId, raiseEvent: true);
+            // Only one sound plays at a time. Any trigger, from the UI or a
+            // global hotkey, ends every current session first - including a
+            // retrigger of the same sound, which therefore restarts from its
+            // beginning - so playback can never overlap.
+            StopAllSoundsCore(raiseEvents: true);
 
             SoundPlaybackSession? session = null;
 
@@ -343,8 +347,8 @@ public sealed class AudioMixEngine : IDisposable
                     soundVolume,
                     monitorVolume);
 
-                // A sound triggered while playback is globally paused starts
-                // at its normal beginning position and waits there.
+                // Replacing every session already cleared the global paused
+                // state, so a newly triggered sound always starts audible.
                 session.SetPaused(playbackPaused);
                 activeSounds.Add(soundId, session);
                 mostRecentSoundId = soundId;
